@@ -14,6 +14,17 @@ LLC ?= llc
 CLANG ?= clang
 CC ?= gcc
 
+ifdef SRC_DIR
+XDP_C := $(SRC_DIR)/${XDP_TARGETS:=.c}
+USER_C := $(SRC_DIR)/${USER_TARGETS:=.c}
+endif
+
+ifdef TARGET_DIR
+XDP_OBJ := $(TARGET_DIR)/${XDP_TARGETS:=.o}
+USER_OBJ := $(TARGET_DIR)/${USER_TARGETS:=.o}
+USER_TARGETS := $(TARGET_DIR)/${USER_TARGETS}
+endif
+
 XDP_C ?= ${XDP_TARGETS:=.c}
 XDP_OBJ ?= ${XDP_C:.c=.o}
 USER_C ?= ${USER_TARGETS:=.c}
@@ -59,17 +70,28 @@ clean:
 	rm -f $(USER_TARGETS) $(XDP_OBJ) $(USER_OBJ) $(COPY_LOADER) $(COPY_STATS)
 	rm -f $(XDP_OBJ:.o=.ll)
 	rm -f *~
+ifdef TARGET_DIR
+	rm -rf $(TARGET_DIR)
+endif
 
 ifdef COPY_LOADER
 $(COPY_LOADER): $(LOADER_DIR)/${COPY_LOADER:=.c} $(COMMON_H)
 	make -C $(LOADER_DIR) $(COPY_LOADER)
+ifdef TARGET_DIR
+	mv $(LOADER_DIR)/$(COPY_LOADER) $(TARGET_DIR)/$(COPY_LOADER)
+else
 	mv $(LOADER_DIR)/$(COPY_LOADER) $(COPY_LOADER)
+endif
 endif
 
 ifdef COPY_STATS
 $(COPY_STATS): $(LOADER_DIR)/${COPY_STATS:=.c} $(COMMON_H)
 	make -C $(LOADER_DIR) $(COPY_STATS)
+ifdef TARGET_DIR
+	mv $(LOADER_DIR)/$(COPY_STATS) $(TARGET_DIR)/$(COPY_STATS)
+else
 	mv $(LOADER_DIR)/$(COPY_STATS) $(COPY_STATS)
+endif
 # Needing xdp_stats imply depending on header files:
 EXTRA_DEPS += $(COMMON_DIR)/xdp_stats_kern.h $(COMMON_DIR)/xdp_stats_kern_user.h
 endif
@@ -105,10 +127,16 @@ $(COMMON_OBJS): %.o: %.h
 	make -C $(COMMON_DIR)
 
 $(USER_TARGETS): %: $(USER_C) $(OBJECT_LIBBPF) Makefile $(COMMON_MK) $(COMMON_OBJS) $(KERN_USER_H) $(EXTRA_DEPS)
+ifdef TARGET_DIR
+	mkdir -p $(TARGET_DIR)
+endif
 	$(CC) -Wall $(CFLAGS) $(LDFLAGS) -o $@ $(COMMON_OBJS) \
 	 $< $(LIBS)
 
 $(XDP_OBJ): %.o: $(XDP_C) Makefile $(COMMON_MK) $(KERN_USER_H) $(EXTRA_DEPS)
+ifdef TARGET_DIR
+	mkdir -p $(TARGET_DIR)
+endif
 	$(CLANG) -S \
 	    -target bpf \
 	    -D __BPF_TRACING__ \

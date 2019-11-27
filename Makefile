@@ -3,11 +3,8 @@
 XDP_TARGETS  := xdp_prog_kern
 USER_TARGETS := xdp_prog_user
 
-XDP_C := src/${XDP_TARGETS:=.c}
-XDP_OBJ := target/${XDP_TARGETS:=.o}
-USER_C := src/${USER_TARGETS:=.c}
-USER_OBJ := target/${USER_TARGETS:=.o}
-USER_TARGETS := target/${USER_TARGETS}
+SRC_DIR := src
+TARGET_DIR := target
 
 LIBBPF_DIR = ./ebpf/libbpf/src/
 COMMON_DIR = ./common
