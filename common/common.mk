@@ -21,7 +21,7 @@ USER_OBJ := ${USER_C:.c=.o}
 
 # Expect this is defined by including Makefile, but define if not
 COMMON_DIR ?= ./common/
-LIBBPF_DIR ?= ./ebpf/libbpf/src/
+LIBBPF_DIR ?= ../ebpf/libbpf/src/
 
 COPY_LOADER ?=
 LOADER_DIR ?= $(COMMON_DIR)/xdp_load_and_stats/
