@@ -27,6 +27,9 @@ static const char *__doc__ = "XDP redirect helper\n"
 
 #include "../common/xdp_stats_kern_user.h"
 
+/* re2dfa library */
+#include "../common/re2dfa.h"
+
 static const struct option_wrapper long_options[] = {
 
 	{{"help",        no_argument,		NULL, 'h' },

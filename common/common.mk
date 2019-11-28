@@ -17,18 +17,20 @@ CC ?= gcc
 ifdef SRC_DIR
 XDP_C := $(SRC_DIR)/${XDP_TARGETS:=.c}
 USER_C := $(SRC_DIR)/${USER_TARGETS:=.c}
+else
+XDP_C = ${XDP_TARGETS:=.c}
+USER_C := ${USER_TARGETS:=.c}
 endif
 
 ifdef TARGET_DIR
 XDP_OBJ := $(TARGET_DIR)/${XDP_TARGETS:=.o}
 USER_OBJ := $(TARGET_DIR)/${USER_TARGETS:=.o}
 USER_TARGETS := $(TARGET_DIR)/${USER_TARGETS}
+else
+XDP_OBJ = ${XDP_C:.c=.o}
+USER_OBJ := ${USER_C:.c=.o}
 endif
 
-XDP_C ?= ${XDP_TARGETS:=.c}
-XDP_OBJ ?= ${XDP_C:.c=.o}
-USER_C ?= ${USER_TARGETS:=.c}
-USER_OBJ ?= ${USER_C:.c=.o}
 
 # Expect this is defined by including Makefile, but define if not
 COMMON_DIR ?= ./common/
@@ -126,13 +128,23 @@ $(COMMON_H): %.h: %.c
 $(COMMON_OBJS): %.o: %.h
 	make -C $(COMMON_DIR)
 
+ifdef SRC_DIR
 $(USER_TARGETS): %: $(USER_C) $(OBJECT_LIBBPF) Makefile $(COMMON_MK) $(COMMON_OBJS) $(KERN_USER_H) $(EXTRA_DEPS)
 ifdef TARGET_DIR
 	mkdir -p $(TARGET_DIR)
 endif
 	$(CC) -Wall $(CFLAGS) $(LDFLAGS) -o $@ $(COMMON_OBJS) \
 	 $< $(LIBS)
+else
+$(USER_TARGETS): %: %.c $(OBJECT_LIBBPF) Makefile $(COMMON_MK) $(COMMON_OBJS) $(KERN_USER_H) $(EXTRA_DEPS)
+ifdef TARGET_DIR
+	mkdir -p $(TARGET_DIR)
+endif
+	$(CC) -Wall $(CFLAGS) $(LDFLAGS) -o $@ $(COMMON_OBJS) \
+	 $< $(LIBS)
+endif
 
+ifdef SRC_DIR
 $(XDP_OBJ): %.o: $(XDP_C) Makefile $(COMMON_MK) $(KERN_USER_H) $(EXTRA_DEPS)
 ifdef TARGET_DIR
 	mkdir -p $(TARGET_DIR)
@@ -148,3 +160,20 @@ endif
 	    -Werror \
 	    -O2 -emit-llvm -c -g -o ${@:.o=.ll} $<
 	$(LLC) -march=bpf -filetype=obj -o $@ ${@:.o=.ll}
+else
+$(XDP_OBJ): %.o: %.c Makefile $(COMMON_MK) $(KERN_USER_H) $(EXTRA_DEPS)
+ifdef TARGET_DIR
+	mkdir -p $(TARGET_DIR)
+endif
+	$(CLANG) -S \
+	    -target bpf \
+	    -D __BPF_TRACING__ \
+	    $(CFLAGS) \
+	    -Wall \
+	    -Wno-unused-value \
+	    -Wno-pointer-sign \
+	    -Wno-compare-distinct-pointer-types \
+	    -Werror \
+	    -O2 -emit-llvm -c -g -o ${@:.o=.ll} $<
+	$(LLC) -march=bpf -filetype=obj -o $@ ${@:.o=.ll}
+endif
