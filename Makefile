@@ -3,6 +3,9 @@
 XDP_TARGETS  := xdp_prog_kern
 USER_TARGETS := xdp_prog_user
 
+SRC_DIR := src
+TARGET_DIR := target
+
 LIBBPF_DIR = ./ebpf/libbpf/src/
 COMMON_DIR = ./common
 
