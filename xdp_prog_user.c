@@ -21,14 +21,14 @@ static const char *__doc__ = "XDP redirect helper\n"
 #include <linux/if_ether.h>
 #include <linux/if_link.h> /* depend on kernel-headers installed */
 
-#include "../common/common_params.h"
-#include "../common/common_user_bpf_xdp.h"
-#include "../common/common_libbpf.h"
+#include "common/common_params.h"
+#include "common/common_user_bpf_xdp.h"
+#include "common/common_libbpf.h"
 
-#include "../common/xdp_stats_kern_user.h"
+#include "common/xdp_stats_kern_user.h"
 
 /* re2dfa library */
-#include "../common/re2dfa.h"
+#include "common/re2dfa.h"
 
 static const struct option_wrapper long_options[] = {
 
