@@ -12,6 +12,8 @@
 #include "common/xdp_stats_kern_user.h"
 #include "common/xdp_stats_kern.h"
 
+#include "common_kern_user.h"
+
 #define MAX_ENTRIES 256
 #define MAX_PAYLOAD_DEPTH 100
 #define ACCEPTED_STATE 3
@@ -19,15 +21,6 @@
 #ifndef memcpy
 #define memcpy(dest, src, n) __builtin_memcpy((dest), (src), (n))
 #endif
-
-struct match {
-	__u16 state;
-	__u16 chars;
-};
-
-struct action{
-	__u16 state;
-};
 
 struct payload {
 	__u16 payload;
@@ -56,7 +49,7 @@ static __always_inline int parse_payload(struct hdr_cursor *nh,
 		mat.chars = pl->payload;
 		struct action *act = bpf_map_lookup_elem(&IDS_state_map, &mat);
 		if (!act){
-			return XDP_ABORTED;
+			mat.state = 0;
 		}
 		else if (act->state == ACCEPTED_STATE){
 			return XDP_DROP;
