@@ -1,1582 +1,1408 @@
-#include <stdio.h>
-#include <string.h>
 #include <stdlib.h>
+#include <string.h>
+#include <stdio.h>
+#include <assert.h>
 #include <ctype.h>
+
 #include "re2dfa.h"
 
-//tokenise=============================================================================================================
-struct tokenNode
+/*******************************************************************************
+******************               Basic Function               ******************
+*******************************************************************************/
+
+static int __cmp_addr_int_ptr(const void *a_, const void *b_)
 {
-	char symbol1;
-	char op;
-	char symbol2;
-	void *littleArray1;//call tokenArray typecast
-	void *littleArray2;//call tokenArray typecast
-
-	//store NULL or 0 if nothing is present
-};
-
-struct tokenArray
-{
-	struct tokenNode *list;
-	int tokenCount;
-};
-
-// Mathematical tools +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-int *binMapUnion(int *a, int *b, int symbolCount)
-{
-	int *t = (int *)malloc((symbolCount+1) * sizeof(int));
-	int i;
-	
-	for( i = 1; i <= symbolCount; i++ ) t[i] = a[i] | b[i];
-
-	return t;
+    int* a = *((int**) a_);
+    int* b = *((int**) b_);
+    if (a < b) return -1;
+    else if (a > b) return 1;
+    else return 0;
 }
 
-int *toBinaryMap(int *a, int n, int symbolCount)
+static int __cmp_addr_NFA_state_ptr(const void *a_, const void *b_)
 {
-	int i;
-	symbolCount = symbolCount + 1;
-	int *b = (int *)malloc(symbolCount * sizeof(int));
-
-	for( i = 0; i < n; i++ ) b[a[i]] = 1;
-	return b; 
+    struct NFA_state* a = *((struct NFA_state**) a_);
+    struct NFA_state* b = *((struct NFA_state**) b_);
+    if (a < b) return -1;
+    else if (a > b) return 1;
+    else return 0;
 }
 
-long long int toDecimal(int *a, int symbolCount)
+static int __cmp_addr_DFA_state_ptr(const void *a_, const void *b_)
 {
-	int i;
-	long long int prev_exponent = 1, decimal = 0;
-	for( i = symbolCount; i >= 1; i-- ){
-		decimal += ( prev_exponent * a[i] );
-		prev_exponent *= 2; 
-	}
-	return decimal;
+    struct DFA_state* a = *((struct DFA_state**) a_);
+    struct DFA_state* b = *((struct DFA_state**) b_);
+    if (a < b) return -1;
+    else if (a > b) return 1;
+    else return 0;
 }
 
-int *Union(int a1[],int a2[],int n,int n1,int n2)
+static int __cmp_char_char(const void *a_, const void *b_)
 {
-	int i,k=0;
-	int *a = (int *)malloc((n)*sizeof(int));
-	memset((void *)a, 0, (n));
-	for(i=0;i<n1;i++)
-	{
-		k=a1[i];
-		a[k-1]=1;
-
-	}
-	for(i=0;i<n2;i++)
-	{
-		k=a2[i];
-		a[k-1]=1;
-	}
-	return a;
+    char a = *((char*) a_);
+    char b = *((char*) b_);
+    if (a < b) return -1;
+    else if (a > b) return 1;
+    else return 0;
 }
 
-// insert a charachter at particular position in a string
-void charins(char *S,char c,int n)
+/*******************************************************************************
+******************           Generic-List Function            ******************
+*******************************************************************************/
+
+/* Create a generic list for some kind of data elements, elem_size specified
+ * the size in bytes of each data element, initial_capacity is the amount of
+ * space reserved for furture use (it cannot be zero). */
+void __create_generic_list(
+    int elem_size, int initial_capacity, struct generic_list *glist)
 {
-	int len = strlen(S);
-	int i;
-	for(i = len;i>n;i--)
-	{
-		S[i]=S[i-1];
-	}
-	S[n]=c;
-	S[len+1]='\0';
-}
-// Mathematical tools ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-// function to normalize the given input RE and verify it
-int normalizeRE(char *re)
-{
-	//this will cleanup re and remove stray spaces and extra characters
-	//and any error in re return 1;
-	int i,j,len,l, top;
-	char brackets[REMAX];
-	/*proper bracketting of the regular expression for the following cases :
-		case 1 : a* | b* ==> (a*)|(b*)
-		case 2 * (abb)*|(abc)* ===> ((abb)*)|((abc)*)	*/
-
-	l = strlen(re);
-	i=0;
-	while(re[i]!='\0')
-	{
-
-		// case : a*|....
-		if(isalpha(re[i])&&(re[i+1]=='*')&&(re[i+2] == '|'))
-			{
-				charins(re,'(',i);
-				charins(re,')',i+3);
-				i = i+4;
-			}
-		// case : ... | b*
-		if(re[i]=='|' && (isalpha(re[i+1])) && (re[i+2] =='*'))
-			{
-				charins(re,'(',i+1);
-				charins(re,')',i+4);
-				i=i+4;
-			}
-		// case : ... ()*|b
-		if(re[i]==')' && re[i+1]=='*' && re[i+2] == '|')
-			{
-				charins(re,')',i+2);
-				int j=i;
-				int top = 0;
-				while(top !=-1)
-				{
-					j--;
-					if(re[j]==')')
-						top++;
-					if(re[j] == '(')
-						top--;
-				}
-				charins(re,'(',j);
-				i=i+4;
-			}
-		//case : ....a|()*
-		if(re[i]=='|' && re[i+1]=='(' )
-		{
-			int z = i;
-			int k =i;
-			k++;
-			int top=0;
-			while(top != -1)
-			{
-				k++;
-				if(re[k]=='(')
-					top++;
-				if(re[k]==')')
-					top--;
-			}
-			if(re[k+1]=='*')
-				{
-					charins(re,')',k+2);
-					charins(re,'(',z+1);
-					i=k+2;
-				}
-
-		}
-
-		i++;
-	}
-
-
-	len =strlen(re);
-
-	//enter # to mark end
-	//augmented RE
-	re[len]='#';
-	re[len+1]='\0';
-	len=len+1;
-
-
-
-	//space cleanup and stray operator
-	for(i=0;i<len;i++)
-	{
-		if(re[i]==' ')
-		{
-			for(j=i;j<len;j++)
-				re[j] = re[j+1];
-			i--;
-			len--;
-		}
-
-		if(!(re[i]=='*'||re[i]=='|'||re[i]==' '||re[i]=='+'||re[i]=='('||re[i]==')'||isalpha(re[i])||re[i]=='#'))
-		{
-			printf("Stray operator/symbol '%c' at %d!\n",re[i],i+1);
-			return 1;
-		}
-	}
-
-	//unwanted repeated operator detection
-	for(i=0;i<len-1;i++)
-	{
-		if(((re[i]=='*'||re[i]=='|'||re[i]=='+'||re[i]=='#')&&(re[i] == re[i+1]))||(re[i]=='*'&&re[i+1]=='+')||(re[i]=='+'&&re[i+1]=='*'))
-		{
-			printf("Wrongly repeated operator '%c' at %d!\n",re[i],i+1);
-			return 1;
-		}
-	}
-
-	//check paranthesis
-	top=0;
-	for(i=0;i<len;i++)
-	{
-		if(re[i]=='(')
-		{
-			brackets[top++]='(';
-		}
-		else if(re[i]==')')
-		{
-			if((top>0)&&(brackets[top-1]=='('))
-				top--;
-			else
-			{
-				printf("Parenthesis not matching at %d!\n",i+1);
-				return 1;
-			}
-		}
-	}
-
-	if(top!=0)
-	{
-		printf("Parenthesis not matching!\n");
-		return 1;
-	}
-	return 0;
+    assert(initial_capacity != 0);    /* zero capacity list would not be
+                                       * correctly expanded */
+    glist->elem_size = elem_size;
+    glist->capacity  = initial_capacity;
+    glist->length    = 0;
+    glist->p_dat     = (char*)malloc(elem_size * initial_capacity);
 }
 
-int countSymbols(char *re, int *uniqCount, char *uni_str)
+/* "Copy constructor" */
+void generic_list_duplicate(
+    struct generic_list *dest, const struct generic_list *src)
 {
-	int n=strlen(re),i,c=0;
-	int uniqMarkArr[300]={0};
-	*uniqCount=0;
-	for(i=0;i<n;i++)
-	{
-		if(isalpha(re[i])||re[i]=='#')
-		{
-			c++;
-			if(uniqMarkArr[re[i]]==0 && re[i]!='e')
-			{
-				uni_str[(*uniqCount)] = re[i];
-				(*uniqCount)++;
-				uniqMarkArr[re[i]] = 1;
-			}
-		}
-	}
-	return c;
+    __create_generic_list(src->elem_size, src->capacity, dest);
+    dest->length = src->length;
+    memcpy(dest->p_dat, src->p_dat, src->length * src->elem_size);
 }
 
-struct tokenArray *initTokenArray(char *re)
-{
-	//this function will initialize and build list array according to RE size
-	// storing the length of the regular expression
-  struct tokenArray *arr;
-	arr=(struct tokenArray*)malloc(sizeof(struct tokenArray));
-
-	int len = strlen(re);
-	int i,top =-1;
-	// variable to store no.of tokens
-	int Count =0;
-	// counting the no.of tokens in the regular expression
-	for(i=0;i<(len);i++)
-	{
-		// Taking an expression enclosed in () or ()* or ()|() or ()|a paranthesis as a single token
-		if(re[i] == '(')
-		{
-			Count++;
-			top++;
-			// Taking the first expression within ()
-			while(top!=-1)
-			{
-				i++;
-				if(re[i]=='(')
-					top++;
-				if(re[i]==')')
-					top--;
-			}
-			// Taking  a single token as ()*
-			if(re[i+1]=='*')
-				i++;
-			// taking a single Token as ()|() or ()|a
-			else if(re[i+1] == '|')
-			{
-				i++;
-				if(isalpha(re[i+1]))
-					i++;
-				else if(re[i+1]=='(')
-				{
-					i=i+1;
-					top++;
-					while(top!=-1)
-					{
-						i++;
-						if(re[i]=='(')
-							top++;
-						if(re[i]==')')
-							top--;
-					}
-				}
-			}
-		}
-		// Taking a symbol with unary operator  t*
-		else if(isalpha(re[i]) && re[i+1]=='*')
-		{
-			Count++;
-			i++;
-		}
-		// Taking two symbols with binary operator "|" as a single token (i.e. a|b)
-		else if(isalpha(re[i])&&re[i+1]=='|' && isalpha(re[i+2]))
-		{
-			Count++;
-			i=i+2;
-		}
-		// Taking a single token as a|()
-		else if(isalpha(re[i])&&re[i+1]=='|' && re[i+2] == '(')
-		{
-			Count++;
-			i=i+2;
-			top++;
-			// Taking the first expression within ()
-			while(top!=-1)
-			{
-				i++;
-				if(re[i]=='(')
-					top++;
-				if(re[i]==')')
-					top--;
-			}
-		}
-		// Taking each symbol as individual token
-		else
-		{
-				Count++;
-		}
-	}
-		// Allocating the No.of Tokens
-		arr->tokenCount = Count;
-		// Allocating a memory for tokens
-		arr->list =(struct tokenNode*)malloc((Count) * sizeof(struct tokenNode));
-		return arr;
+/* Free the memory allocated for the generic list */
+void destroy_generic_list(struct generic_list *glist) {
+    free(glist->p_dat);
 }
 
-struct tokenArray *parseAndStoreTokens(char *re)
+/* Append an element to the tail of specified generic list */
+void generic_list_push_back(struct generic_list *glist, const void *elem)
 {
-	//this function will parse tokens and store them in tokenArray
+    /* if we're running out of space */
+    if (glist->capacity == glist->length)
+    {
+        glist->capacity *= 2;   /* expand two-fold */
+        glist->p_dat =
+            (char*)realloc(glist->p_dat, glist->elem_size * glist->capacity);
+    }
 
-	// Initialize the tokenArray;
-	struct tokenArray *arr;
-	arr = initTokenArray(re);
-	int len=strlen(re);
-	int i,top=-1;
-	int Count = 0;
-	//Parse a single token as a content with in () or ()* or ()|() or ()|a
-
-	for(i=0;i<(len);i++)
-	{
-		// Parse a single token whose 1st Little Array is ()
-		if(re[i] == '(')
-		{
-			arr->list[Count].symbol1 = '\0';
-			char buffer[REMAX];
-			char buffer2[REMAX];
-			int ind =-1;
-			int ind2 =-1;
-			top++;
-			// parsing the contents within the paranthesis
-			while(top!=-1)
-			{
-				i++;
-				buffer[++ind]=re[i];
-				if(re[i]=='(')
-					top++;
-				if(re[i]==')')
-					top--;
-			}
-			top=-1;
-			buffer[ind]='\0';
-			// Recursuive call
-			arr->list[Count].littleArray1 = parseAndStoreTokens(buffer);
-			// Reset Buffer
-			bzero((void *)buffer,ind);
-			ind = -1;
-			// Enter the Unary operator *
-			if(re[i+1]=='*')
-			{
-				i++;
-				arr->list[Count].op = re[i];
-			}
-			// For the Binary operator *
-			else if(re[i+1] == '|')
-			{
-				i++;
-				// Setting the operator
-				arr->list[Count].op = re[i];
-				if(re[i+1]=='(')
-				{
-					i++;
-					top++;
-					// Parsing the token for 2nd LittleArray
-					while(top!=-1)
-					{
-						i++;
-						buffer2[++ind2]=re[i];
-						if(re[i]=='(')
-							top++;
-						if(re[i]==')')
-							top--;
-					}
-					buffer2[ind2]='\0';
-					// Reccursive call
-					arr->list[Count].littleArray2 = parseAndStoreTokens(buffer2);
-					arr->list[Count].symbol2 = '\0';
-					//reset the buffer
-					bzero((void *)buffer2,ind2);
-					ind2 =-1;
-				}
-				// parsing the token as ()|a
-				else
-				{
-					i++;
-					arr->list[Count].symbol2=re[i];
-					arr->list[Count].littleArray2 = NULL;
-				}
-					// Increase the token Node Count
-			}
-			else
-			{
-				arr->list[Count].littleArray2 = NULL;
-				arr->list[Count].symbol2 = '\0';
-				arr->list[Count].op = '\0';
-			}
-			// Increase the token Node Count
-			Count++;
-		}
-
-		//Parse a single token as a content with a|() or a* or a|b or a
-		else if (isalpha(re[i]))
-		{
-			char buffer[REMAX];
-			int ind =-1;
-			arr->list[Count].littleArray1 = NULL;
-			arr->list[Count].symbol1 = re[i];
-			// taking token as Single a
-			if(isalpha(re[i+1])||re[i+1]=='#')
-			{
-				arr->list[Count].littleArray2 = NULL;
-				arr->list[Count].symbol2 = '\0';
-				arr->list[Count].op = '\0';
-			}
-			// setting the unary operator *
-			else if (re[i+1] == '*')
-			{
-				i++;
-				arr->list[Count].op = re[i];
-				arr->list[Count].littleArray2 = NULL;
-				arr->list[Count].symbol2 = '\0';
-			}
-			// setting the binary operator ' | '
-			else if (re[i+1]=='|')
-			{
-				i++;
-				arr->list[Count].op = re[i];
-				// taking a single token as a|b
-				if(isalpha(re[i+1]))
-				{
-					i++;
-					arr->list[Count].littleArray2 = NULL;
-					arr->list[Count].symbol2 = re[i];
-				}
-				// taking a single token as a|()
-				else if(re[i+1]=='(')
-				{
-					i++;
-					top++;
-					// Parsing the token for 2nd LittleArray
-					while(top!=-1)
-					{
-						i++;
-						buffer[++ind]=re[i];
-						if(re[i]=='(')
-							top++;
-						if(re[i]==')')
-							top--;
-					}
-					buffer[ind]='\0';
-					// Reccursive call
-					arr->list[Count].littleArray2 = parseAndStoreTokens(buffer);
-					arr->list[Count].symbol2 = '\0';
-					//reset the buffer
-					bzero((void *)buffer,ind);
-					ind =-1;
-				}
-			}
-			//Increase the Token Node Count
-			Count++;
-		}
-		else if(re[i]=='#')
-		{
-			arr->list[Count].symbol1 = re[i];
-			arr->list[Count].littleArray1 = NULL;
-			arr->list[Count].op = '\0';
-			arr->list[Count].littleArray2 = NULL;
-			arr->list[Count].symbol2 = '\0';
-		}
-	}
-	return arr;
+    /* append *elem to the tail of glist */
+    memcpy(
+        glist->p_dat + glist->elem_size * glist->length++, elem,
+        glist->elem_size);
 }
 
-void printTokenArray(struct tokenArray *arr)
+/* Remove the last element in the list */
+void generic_list_pop_back(struct generic_list *glist)
 {
-	if(arr==NULL||arr->tokenCount==0||arr->list==NULL)
-		return;
-
-	int i;
-	printf("\n");
-	printf("\n No.of.Tokens :\t%d\n\n ",arr->tokenCount);
-	for(i=0;i<arr->tokenCount;i++)
-	{
-		printf("\n");
-		printf("Symbol 1: %c\n",arr->list[i].symbol1);
-		printf("Operator: %c\n",arr->list[i].op);
-		printf("Symbol 2: %c\n",arr->list[i].symbol2);
-		if(arr->list[i].littleArray1!=NULL)
-		{
-			printf("little arr1 present\n");
-			printf("\n  ****************************\n");
-			printTokenArray(arr->list[i].littleArray1);
-			printf("\n  ****************************\n");
-		}
-		if(arr->list[i].littleArray2!=NULL)
-		{
-			printf("little arr2 present\n");
-			printf("\n ****************************\n");
-			printTokenArray(arr->list[i].littleArray2);
-			printf("\n ****************************\n");
-		}
-	printf("\n-------------------------------------\n");
-	}
+    assert(glist->length != 0);  /* check for stack downflow */
+    glist->length -= 1;
 }
 
-//tokenise=============================================================================================================
-
-
-
-
-//syntax tree===========================================================================================================
-struct posarray
+/* Get the pointer to the element on the tail of the list */
+void *generic_list_back(struct generic_list *glist)
 {
-	int poscount;
-	int *poslist;
-
-	//this data structure will store firstpos and lastpos
-};
-
-struct syntaxNode
-{
-	char data;
-	int nullable;
-	struct posarray firstpos;
-	struct posarray lastpos;
-	struct syntaxNode *leftchild;
-	struct syntaxNode *rightchild;
-
-	//for building syntax tree
-};
-
-
-struct syntaxNode *createSyntaxNode(char ch, int s_curr, int s_count)
-{
-	//build the node and return the node's address
-
-	struct syntaxNode *newNode;
-	newNode = (struct syntaxNode *)malloc(sizeof(struct syntaxNode));
-
-	newNode->data = ch;
-	newNode->nullable = 0;
-	newNode->leftchild = NULL;
-	newNode->rightchild = NULL;
-
-	newNode->firstpos.poscount=0;
-	newNode->firstpos.poslist = (int*)malloc(s_count*sizeof(int));
-
-	newNode->lastpos.poscount=0;
-	newNode->lastpos.poslist = (int*)malloc(s_count*sizeof(int));
-
-	//support for epsilon
-	if(ch=='e')
-	{
-		return newNode;
-	}
-	//if s_curr!=0, store pos s
-	if(s_curr!=0)
-	{
-		newNode->firstpos.poslist[0] = s_curr;
-		newNode->firstpos.poscount=1;
-
-		newNode->lastpos.poslist[0] = s_curr;
-		newNode->lastpos.poscount=1;
-	}
-	return newNode;
-
+    assert(glist->length != 0);
+    return glist->p_dat + glist->elem_size * (glist->length - 1);
 }
 
-struct syntaxNode *Token2syntaxNode(struct tokenNode *token_n, int *flag, int *s_curr, int s_count)
+/* Get pointer to the first element  */
+void *generic_list_front(struct generic_list *glist)
 {
-
-	//flag: return 0 if no littlearray, 1 if littlearray 1, 2 if both, 3 if only littleArray2
-
-	//take a new empty pointer
-	struct syntaxNode *newNodePtr=NULL, *temp;
-	*flag = 0;
-	//cases:
-
-	if(token_n->op=='*')
-	{
-		// * is present, build a node with star and store in new
-		newNodePtr = createSyntaxNode('*', 0, s_count);
-	}
-	else if(token_n->op=='|')
-	{
-		// | is present,  build a node with pipe and store it in new
-		newNodePtr = createSyntaxNode('|', 0, s_count);
-	}
-
-
-	// symbol1 present, increment s_curr, build a node and put char, tell to store pos s, if new is empty store there, else in new->leftchild
-	if(token_n->symbol1!='\0')
-	{
-		(*s_curr)++;
-		temp = createSyntaxNode(token_n->symbol1, *s_curr, s_count);
-		if(newNodePtr==NULL)
-			newNodePtr = temp;
-		else
-			newNodePtr->leftchild = temp;
-	}
-
-	// symbol2 present, increment s_curr, build a node and put char, tell to store pos s, and store in new->rightchild
-	if(token_n->symbol2!='\0')
-	{
-		(*s_curr)++;
-		temp = createSyntaxNode(token_n->symbol2, *s_curr, s_count);
-		newNodePtr->rightchild = temp;
-	}
-
-	if(token_n->littleArray1==NULL && token_n->littleArray2==NULL)//littlearrays not present, flag=0
-		*flag = 0;
-	else if(token_n->littleArray1!=NULL && token_n->littleArray2==NULL)//littleArray1 present only, flag=1
-		*flag = 1;
-	else if(token_n->littleArray1!=NULL && token_n->littleArray2!=NULL)//littleArray1 present && littleArray2 present, flag=2
-		*flag = 2;
-	else if(token_n->littleArray1==NULL && token_n->littleArray2!=NULL)//littleArray2 present only, flag=3
-		*flag = 3;
-
-	//return new
-	return newNodePtr;
+    assert(glist->length != 0);
+    return glist->p_dat;
 }
 
-struct syntaxNode *syntaxTreeBuilder(struct tokenArray *tokenarr, int *s_curr, int s_count)
-{
-	struct syntaxNode *synRoot=NULL, *synNew, *temp;
-	int i, flag;
-
-	//special handling for first token
-	//take a node, store it in root
-	synRoot = Token2syntaxNode(&(tokenarr->list[0]),&flag,s_curr,s_count);
-
-	//if flag=1||2, call recursive littlearray1 and store it
-	if(flag==1||flag==2)
-	{
-		temp = syntaxTreeBuilder((tokenarr->list[0]).littleArray1, s_curr,s_count);
-		//if root is still NULL, store it there only,
-		if(synRoot == NULL)
-		{
-			synRoot = temp;
-		}
-		else
-		{
-			//otherwise store it in root->leftchild
-			synRoot->leftchild = temp;
-		}
-	}
-
-	if(flag==2||flag==3)
-	{
-		//if flag=2||3, call recursive littleArray2 and store it in root->rightchild
-		temp = syntaxTreeBuilder((tokenarr->list[0]).littleArray2, s_curr,s_count);
-		synRoot->rightchild = temp;
-	}
-
-
-	//mini tree building loop
-	for(i = 1; i < (tokenarr->tokenCount); i++)
-	{
-		//create a cat node and store it in new ptr
-		synNew = createSyntaxNode('.', 0, s_count);
-
-		//leftchild
-		//store root in new->leftchild
-		synNew->leftchild = synRoot;
-		//store new in root, new root is created
-		synRoot = synNew;
-
-		//rightchild
-		//take a node, store it in root->rightchild
-		synRoot->rightchild = Token2syntaxNode(&(tokenarr->list[i]),&flag,s_curr,s_count);
-
-		//if flag=1||2, call recursive littlearray1 and store it
-		if(flag==1||flag==2)
-		{
-			temp = syntaxTreeBuilder((tokenarr->list[i]).littleArray1, s_curr,s_count);
-			//if Root->rightchild is still NULL, store it there only,
-			if(synRoot->rightchild == NULL)
-			{
-				synRoot->rightchild = temp;
-			}
-			else
-			{
-				//otherwise store it in root->rightchild->leftchild
-				synRoot->rightchild->leftchild = temp;
-			}
-		}
-
-		if(flag==2||flag==3)
-		{
-			//if flag=2||3, call recursive littleArray2 and store it in root->rightchild->rightchild
-			temp = syntaxTreeBuilder((tokenarr->list[i]).littleArray2, s_curr,s_count);
-			synRoot->rightchild->rightchild = temp;
-		}
-
-	}
-
-	//return final root
-	return synRoot;
+/* Empty the generic list */
+void generic_list_clear(struct generic_list *glist) {
+    glist->length = 0;
 }
 
-
-// nullable ============================================================================================================
-// function to check where the node is nullable or not
-void isnullable(struct syntaxNode *node)
+/* Find element in the list using specified compare function, it returns the
+ * pointer to the element found in the list, or a NULL is returned if *elem is
+ * not in glist */
+void *generic_list_find(
+    struct generic_list *glist, const void *elem,
+    int(*cmp)(const void*, const void*))
 {
-	// true if node labelled epsilon
-	if(node->data == 'e')
-		{
-			node->nullable = 1;
-		}
-	// true if a node labelled *
-	else if(node->data == '*')
-		{
-			node->nullable = 1;
-		}
-	// for a node labelled c1.c2 nulable(c1)and nullable(c2)
-	else if(node->data == '.')
-		{
-			node->nullable = (node->leftchild->nullable)&&(node->rightchild->nullable);
-		}
-	// for a node labelled c1|c2 nulable(c1) or nullable(c2)
-	else if(node->data == '|')
-		{
-			node->nullable = ((node->leftchild->nullable)||(node->rightchild->nullable));
-		}
-	// for a node labelled  with i not nullable
-	else
-		{
-			node->nullable = 0;
-		}
+    int i = 0;
+    char *cur = glist->p_dat;
+
+    for ( ; i < glist->length; i++, cur += glist->elem_size) {
+        if (cmp((void*)cur, elem) == 0) return cur;  /* found */
+    }
+
+    return NULL;   /* not found */
 }
 
-// To set the nullable of each node
-// tree is being parsed in LVR manner
-void nullable (struct syntaxNode *synRoot)
+/* Add an element to the list only if this element is not in the list (we
+ * actually regard the glist as a set). It would return 1 if *elem is actually
+ * appended, or it would return 0 when there's already an *elem in the list. */
+int generic_list_add(
+    struct generic_list *glist, const void *elem,
+    int(*cmp)(const void*, const void*))
 {
-	if(synRoot == NULL)
-		return;
-	//L
-	nullable(synRoot->leftchild);
-	//V
-	nullable(synRoot->rightchild);
-	//R
-	isnullable(synRoot);
+    /* see if elem is already in the list*/
+    void *p_same = generic_list_find(glist, elem, cmp);
 
-}// end of Nullable
-//nullable ==============================================================================================================
-
-//FIRSTPOS and LASTPOS +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-void FLpos(struct syntaxNode *node,int s_count)
-{
-
-	int i=0;
-	// FIRSTPOS is NULL if node labelled 'e' and if leaf labeled with position i then  firstpos =i and lastpos =i
-	// Already implented during syntax tree creation.
-
-	// if a node labelled '|' ; fisrtpos is fp(c1) U fp(c2) ; lastpos is lp(c1) U lp(c2)
-	if(node->data == '|')
-		{
-			int *fp = Union(node->leftchild->firstpos.poslist,node->rightchild->firstpos.poslist,s_count,node->leftchild->firstpos.poscount,node->rightchild->firstpos.poscount);
-			int *lp = Union(node->leftchild->lastpos.poslist,node->rightchild->lastpos.poslist,s_count,node->leftchild->lastpos.poscount,node->rightchild->lastpos.poscount);
-			for(i=0;i<s_count;i++)
-			{
-				if(fp[i] == 1)
-					node->firstpos.poslist[node->firstpos.poscount++]=i+1;
-				if(lp[i] == 1)
-					node->lastpos.poslist[node->lastpos.poscount++] =i+1;
-			}
-
-		}
-	// if a node labelled '*' ; firstpos id fp(c1) ; lastpos is lp(c1)
-	else if(node->data == '*')
-	{
-		for(i=0;i<node->leftchild->firstpos.poscount;i++)
-		{
-			node->firstpos.poslist[node->firstpos.poscount++]=node->leftchild->firstpos.poslist[i];
-		}
-		for(i=0;i<node->leftchild->lastpos.poscount;i++)
-		{
-			node->lastpos.poslist[node->lastpos.poscount++]=node->leftchild->lastpos.poslist[i];
-		}
-	}
-
-	// if a node labelled '.'
-	// FIRSTPOS;
-	/*	if (nullable(c1))
-			firstpos = fp(c1) U fp(c2)
-		else
-			firstpos = fp(c1)
-	*/
-	// LASTPOS;
-	/*
-		if(nullable(c2))
-			lastpos = lp(c1) U lp(c2)
-		else
-			lastpos = lp(c2)
-	*/
-	else if(node->data == '.')
-	{
-		if(node->leftchild->nullable)
-		{
-			int *fp = Union(node->leftchild->firstpos.poslist,node->rightchild->firstpos.poslist,s_count,node->leftchild->firstpos.poscount,node->rightchild->firstpos.poscount);
-			for(i=0;i<s_count;i++)
-			{
-				if(fp[i] == 1)
-					node->firstpos.poslist[node->firstpos.poscount++]=i+1;
-			}
-		}
-		else
-		{
-			for(i=0;i<node->leftchild->firstpos.poscount;i++)
-			{
-				node->firstpos.poslist[node->firstpos.poscount++]=node->leftchild->firstpos.poslist[i];
-			}
-
-		}
-		if(node->rightchild->nullable)
-		{
-			int *lp = Union(node->leftchild->lastpos.poslist,node->rightchild->lastpos.poslist,s_count,node->leftchild->lastpos.poscount,node->rightchild->lastpos.poscount);
-			for(i=0;i<s_count;i++)
-			{
-				if(lp[i] == 1)
-					node->lastpos.poslist[node->lastpos.poscount++]=i+1;
-			}
-
-		}
-		else
-		{
-
-			for(i=0;i<node->rightchild->lastpos.poscount;i++)
-			{
-				node->lastpos.poslist[node->lastpos.poscount++]=node->rightchild->lastpos.poslist[i];
-			}
-
-		}
-
-	}
-
+    if (p_same == NULL)
+    {
+        /* elem not in the list, so append it */
+        generic_list_push_back(glist, elem);
+        return 1;
+    }
+    else {
+        return 0;  /* elem already in the list, do nothing */
+    }
 }
 
-// To set the firstpos and lastpos of each node
-// tree is being parsed in LVR manner
-void firstpos_lastpos(struct syntaxNode *synRoot,int s_count)
+/*******************************************************************************
+******************                NFA Function                ******************
+*******************************************************************************/
+
+/* LL(1) parser modules */
+static struct NFA __LL_expression(char **statement);
+static struct NFA __LL_term(char **statement);
+static struct NFA __LL_primary(char **statement);
+
+/* expression:
+       expression term
+       expression | term
+       term                */
+static struct NFA __LL_expression(char **statement)
 {
-	if(synRoot == NULL)
-		return;
-	//L
-	firstpos_lastpos(synRoot->leftchild,s_count);
-	//V
-	firstpos_lastpos(synRoot->rightchild,s_count);
-	//R
-	FLpos(synRoot,s_count);
+    struct NFA lhs = __LL_term(statement);
+    struct NFA ret, rhs;
+    char ch;
+
+    for ( ; ; lhs = ret)
+    {
+        ch = **statement;
+
+        if (isalnum(ch) || ch == '(') { /* expression term */
+            rhs = __LL_term(statement);
+            ret = NFA_concatenate(&lhs, &rhs);
+        }
+        else if (ch == '|') {           /* expression | term */
+            *statement += 1;            /* eat '|' */
+            rhs = __LL_term(statement);
+            ret = NFA_alternate(&lhs, &rhs);
+        }
+        else {
+            return lhs;                 /* term  */
+        }
+    }
+
+    return ret;   /* we should never reach here */
 }
 
-
-//FIRSTPOS and LASTPOS ++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++
-
-//function to print the syntax tree
-void printSyntaxTree(struct syntaxNode *synRoot)
+/* term:
+       term *
+       term +
+       primary    */
+static struct NFA __LL_term(char **statement)
 {
-	int i;
-	//print recursivly with vlr rule with addresses
-	if(synRoot==NULL)
-		return;
-	printf("\n=================================\n");
-	printf("\nAddress: %ld",(long int)(synRoot));
-	printf("\nData: %c",synRoot->data);
-	printf("\nNullable: %d",synRoot->nullable);
-	printf("\nFirstpos Length: %d",synRoot->firstpos.poscount);
-	printf("\nFirstpos: ");
-	for(i=0;i<synRoot->firstpos.poscount;i++)
-		printf("%d,",synRoot->firstpos.poslist[i]);
-	printf("\nLastpos Length: %d",synRoot->lastpos.poscount);
-	printf("\nLastpos: ");
-	for(i=0;i<synRoot->lastpos.poscount;i++)
-		printf("%d,",synRoot->lastpos.poslist[i]);
+    struct NFA lhs = __LL_primary(statement);
+    struct NFA ret;
+    char ch = **statement;
 
-	printf("\nLeft child: %ld",(long int)(synRoot->leftchild));
-	printf("\nRight child: %ld",(long int)(synRoot->rightchild));
+    if (ch == '*') {            /* term * */
+        ret = NFA_Kleene_closure(&lhs);
+        *statement += 1;        /* eat the Kleene star */
+    }
+    else if (ch == '+') {       /* term + */
+        ret = NFA_positive_closure(&lhs);
+        *statement += 1;        /* eat the positive closure */
+    }
+    else if (ch == '?') {       /* term ? */
+        ret = NFA_optional(&lhs);
+        *statement += 1;        /* eat the optional (question) mark */
+    }
+    else {
+        return lhs;             /* primary */
+    }
 
-	printf("\n=================================\n");
-
-	printSyntaxTree(synRoot->leftchild);
-	printSyntaxTree(synRoot->rightchild);
-
-
+    return ret;
 }
 
-
-
-void saveSyntaxTreeRecursive(struct syntaxNode *synRoot, FILE *fpsyntax)
+/* primary:
+       ALNUM
+       ( expression )    */
+static struct NFA __LL_primary(char **statement)
 {
-	int i;
-	//print recursivly with vlr rule with addresses
-	if(synRoot==NULL)
-		return;
-	fprintf(fpsyntax,"%ld\n",(long int)(synRoot));//node address
-	fprintf(fpsyntax,"%c\n",synRoot->data);//node data
-	fprintf(fpsyntax,"%d\n",synRoot->nullable);//node is nullable
-	//fprintf(fpsyntax,"%d\n",synRoot->firstpos.poscount);//firstpos length
-	for(i=0;i<synRoot->firstpos.poscount;i++)
-		fprintf(fpsyntax,"%d,",synRoot->firstpos.poslist[i]);//firstpos csv
-	//fprintf(fpsyntax,"\n%d\n",synRoot->lastpos.poscount);//lastpos length
-	fprintf(fpsyntax,"\n");
-	for(i=0;i<synRoot->lastpos.poscount;i++)
-		fprintf(fpsyntax,"%d,",synRoot->lastpos.poslist[i]);//lastpos csv
+    struct NFA ret;
+    char ch = **statement;
 
-	fprintf(fpsyntax,"\n%ld ",(long int)(synRoot->leftchild));//left child address
-	fprintf(fpsyntax,"%ld\n",(long int)(synRoot->rightchild));//right child address
+    if (isalnum(ch)) {          /* ALNUM */
+        ret = NFA_create_atomic(ch);
+        *statement += 1;        /* eat the character */
+    }
+    else if (ch == '(')         /* ( expression ) */
+    {
+        *statement += 1;        /* eat '(' */
+        ret = __LL_expression(statement);
+        if (**statement != ')') {
+            fprintf(stderr, "no matching ')' found\n"); exit(-1);
+        }
+        *statement +=1;         /* eat ')' */
+    }
+    else {
+        fprintf(stderr, "unrecognized character \"%c\"\n", ch);
+        exit(-1);
+    }
 
-	//recursion call
-	saveSyntaxTreeRecursive(synRoot->leftchild,fpsyntax);
-	saveSyntaxTreeRecursive(synRoot->rightchild,fpsyntax);
+    return ret;
 }
 
-void saveSyntaxTree(struct syntaxNode *synRoot)
+/* LL parser driver/interface */
+struct NFA reg_to_NFA(const char *regexp)
 {
-	FILE *fp;
-	fp=fopen("stree.txt","w");
-	if(fp==NULL)
-	{
-		//printf("Syntax tree file open failed!\n");
-		return;
-	}
-	//printf("\nSaving Syntax Tree to file..\n");
-	saveSyntaxTreeRecursive(synRoot, fp);
-	fprintf(fp,"$&$\n");
-	//fclose(fp);
+    char **cur = (char **)(&regexp);
+    struct NFA nfa = __LL_expression(cur); /* creating NFA for regexp is just
+                                            * like assembling building blocks
+                                            * as what the regexp says */
+
+    if (**cur != '\0') {
+        fprintf(stderr, "unexcepted character \"%c\"\n", **cur);
+        exit(-1);
+    }
+
+    return nfa;
 }
 
-//syntax tree===========================================================================================================
-
-//followpos calculation=================================================================================================
-	/*
-		RULES:
-		{i, j} * {a, b}                      .
-			   |  			    			/ \
-			   |			  			   /   \
-			   |                      	  /     \
-			   C                 	 C1{i, j} {a, b}C2
-
-		follopos(i) = {a, b}		followpos(i) = {a, b}
-		followpos(j) = {a, b}		followpos(j) = {a, b}
-	*/
-
-struct followpos_matrix{
-	int *set;
-	int setCount;
-
-	//to store followpos....
-};
-
-struct followpos_matrix *initFollowposMatrix(int symbolcount)
+/* dump the transition from state to state->to[i_to] */
+static void __NFA_transition_dump_graphviz(
+    const struct NFA_state *state, int i_to, FILE *fp)
 {
-	symbolcount = symbolcount + 1;
-	struct followpos_matrix *p = (struct followpos_matrix *)malloc(symbolcount * sizeof(struct followpos_matrix));
-	int i;
+    switch (state->transition[i_to].trans_type)
+    {
+    case NFATT_EPSILON:
+        fprintf(fp, "    addr_%p -> addr_%p [ label = \"epsilon\" ];\n",
+            (void*)state,
+            (void*)state->to[i_to]);
+        break;
 
-	for( i = 0; i < symbolcount; i++ ) p[i].setCount = 0;	
-	return p;
+    case NFATT_CHARACTER:
+        fprintf(fp, "    addr_%p -> addr_%p [ label = \"%c\" ];\n",
+            (void*)state,
+            (void*)state->to[i_to],
+            state->transition[i_to].trans_char);
+        break;
+
+    default:
+        abort();  /* you should never reach here */
+    }
 }
 
-
-void printFollowpos(struct followpos_matrix *fp, int symbolcount)
+/* dump the transitions to *all reachable* states from specified state */
+static void __NFA_reachable_states_dump_graphviz(
+    const struct NFA_state *state, struct generic_list *visited, FILE *fp)
 {
-	FILE *kx=fopen("followpos.txt","w");
-	int i, j, k, tx, temp;
-	//printf("\n------CALCULATED FOLLOWPOS: \n");
-	fprintf(kx, "%d\n", symbolcount);
-	for( i = 1; i <= symbolcount; i++)
-	{
-		//printf("fp(%d) = { ", i);
-		//Sorting followpos
-		for(j=0;j<fp[i].setCount-1;j++)
-		{
-			tx=j;
-			for(k=j+1;k<fp[i].setCount;k++)
-			{
-				if(fp[i].set[tx]>fp[i].set[k])
-					tx=k;
-			}
-			temp=fp[i].set[tx];
-			fp[i].set[tx]=fp[i].set[j];
-			fp[i].set[j]=temp;
-		}
-		//-----------------		
-		for( j = 0; j < fp[i].setCount; j++ )
-		{
-			//printf("%d, ", fp[i].set[j]);
-			fprintf(kx, "%d ", fp[i].set[j]);
-		}
-		//printf("}\n");
-		fprintf(kx,"\n");
-	}
-	//printf("----------------------------------------------------------\n");
-	fclose(kx);
+    int n_to = NFA_state_transition_num(state);
+    int i_to = 0;
+
+    for ( ; i_to < n_to; i_to++)
+    {
+        /* dump this transition */
+        __NFA_transition_dump_graphviz(state, i_to, fp);
+
+        /* dump the transition target if it has not ever been dumped, exactly
+         * the same way with DFS. */
+        if (generic_list_add(
+                visited, &state->to[i_to], __cmp_addr_DFA_state_ptr) != 0) {
+            __NFA_reachable_states_dump_graphviz(state->to[i_to], visited, fp);
+        }
+    }
 }
 
-int isDuplicate(int *a, int l, int k)
+/* Dump DOT code to vizualize specified NFA */
+void NFA_dump_graphviz_code(const struct NFA *nfa, FILE *fp)
 {
-	int i;
-	for( i = 0; i < l; i++ ){
-		if( a[i] == k ) return 1;
-	}
-	return 0;
+    struct generic_list visited_state;
+    create_generic_list(struct NFA_state*, &visited_state);
+
+    fprintf(fp,
+        "digraph finite_state_machine {\n"
+        "    rankdir=LR;\n"
+        "    size=\"8,5\"\n"
+        "    node [shape = doublecircle label=\"\"]; addr_%p\n"
+        "    node [shape = circle]\n", (void*)nfa->terminate);
+
+    /* dump the finite state machine recursively */
+    generic_list_push_back(&visited_state, &nfa->start);
+    __NFA_reachable_states_dump_graphviz(nfa->start, &visited_state, fp);
+
+    /* dump start mark */
+    fprintf(fp, "    node [shape = none label=\"\"]; start\n");
+    fprintf(fp, "    start -> addr_%p [ label = \"start\" ]\n",
+        (void*)nfa->start);
+
+    /* done */
+    fprintf(fp, "}\n");
+    destroy_generic_list(&visited_state);
 }
 
-void assignFollowpos(int *a, int *b, int c1, int c2, struct followpos_matrix *fp, int symbolcount)
+/* Match the given substring in a recursive fasion */
+static int __NFA_is_substate_match(
+    const struct NFA_state *state, const char *str)
 {
-	int i, j, t;
-	if( c1 == 0 ) return;
+    char c = str[0];  /* transition to match */
+    int i_trans = 0, n_trans = NFA_state_transition_num(state);
+    int is_matched = 0;
 
-	for( i = 0; i < c1; i++ ){
-		int *c = (int *)malloc(symbolcount * sizeof(int));
-		t = 0;
-		for( j = 0; j < fp[a[i]].setCount; j++ ) c[t++] = fp[a[i]].set[j];
+    /* If we reached the terminate state while consumed the entire string*/
+    if (c == '\0' && n_trans == 0)   return 1;   /* str matched the nfa */
 
-		for( j = 0; j < c2; j++ ){
-			//printf("%d %d %d\n", a[i], b[j], t);
-			if( !isDuplicate(c, t, b[j]) ){
-				c[t++] = b[j];
-				fp[a[i]].setCount++;
-			}
-		}
-		fp[a[i]].set = c;
-	}
+    for ( ; i_trans < n_trans; i_trans++)
+    {
+        /* if it is an epsilon move, we can take this way instantly */
+        if (state->transition[i_trans].trans_type == NFATT_EPSILON) {
+            is_matched = __NFA_is_substate_match(state->to[i_trans], str);
+        }
+        /* or it must be a character transition, check if we can take it */
+        else if (state->transition[i_trans].trans_char == c) {
+            is_matched = __NFA_is_substate_match(state->to[i_trans], str + 1);
+        }
+
+        if (is_matched) return 1;
+    }
+
+    return 0;  /* not matched */
 }
 
-void calculateFollowpos(struct syntaxNode *root, int symbolcount, struct followpos_matrix *fp)
+/* Check if the string matches the pattern implied by the nfa */
+int NFA_pattern_match(const struct NFA *nfa, const char *str)
 {
-	//tree is traversed in VLR manner...
-	if( root == NULL ) return;
-
-	if( root->data == '.' ){
-		assignFollowpos(root->leftchild->lastpos.poslist, root->rightchild->firstpos.poslist, root->leftchild->lastpos.poscount, root->rightchild->firstpos.poscount, fp, symbolcount);
-	}
-
-	if( root->data == '*' ){
-		assignFollowpos(root->firstpos.poslist, root->lastpos.poslist, root->firstpos.poscount, root->lastpos.poscount, fp, symbolcount);
-	}
-	calculateFollowpos(root->leftchild, symbolcount, fp);
-	calculateFollowpos(root->rightchild, symbolcount, fp);
-}
-//followpos calculation end=============================================================================================
-
-
-//transition table calculation==========================================================================================
-char *initSymbolArray(int symbolcount)
-{
-	symbolcount = symbolcount + 1;
-	char *t = (char *)malloc(symbolcount * sizeof(char));
-	return t;
+    /* find a sequence of transitions recursively */
+    return __NFA_is_substate_match(nfa->start, str);
 }
 
-void printSymbolTable(char *st, int symbolcount)
+/* Create a new isolated NFA state, there's no transitions going out of it */
+struct NFA_state *alloc_NFA_state(void)
 {
-	int i;
-	printf("\n-----------SYMBOL TABLE------------------------------\n");
-	for( i = 1; i <= symbolcount; i++ ) printf("[%c,%d]  ", st[i], i);
-	printf("\n-----------------------------------------------------\n");
+    struct NFA_state *state =
+        (struct NFA_state*)malloc(sizeof(struct NFA_state));
+    struct NFA_transition null_transition = {NFATT_NONE, 0};
+
+    /* create an isolated NFA state node */
+    state->to[0] = state->to[1] = NULL;
+    state->transition[0] = state->transition[1] = null_transition;
+
+    return state;
 }
 
-
-void printDFA(struct dfaMatrix dfa[REMAX][REMAX], int symbolcount, int no_of_inputs, char *input, int _new_states)
-{
-	int i, j, k, t_symbocount = symbolcount;
-	symbolcount *= 3;
-
-	printf("\n--------------------DFA TABLE:\n");
-	for( i = 1; i <= symbolcount; i++ ) printf(" ");
-	for( i = 1; i <= no_of_inputs; i++ ){
-		printf("|");
-		for( j = 1; j <= symbolcount/2; j++ ) printf(" ");
-		printf("%c", input[i-1]);
-		for( j = 1; j <= symbolcount/2 - 1; j++ ) printf(" ");
-	}
-	printf("\n");
-
-	for( i = 1; i <= (symbolcount*no_of_inputs); i++ ) printf("++");
-	printf("\n");
-
-	for( i = 1; i <= _new_states; i++ ){
-		for( j = 0; j <= no_of_inputs; j++ ){
-			printf("[");
-			for( k = 1; k <= t_symbocount; k++ ) printf("%d,", dfa[i][j].set[k]);
-			printf("]");
-			for( k = 1; k <= (symbolcount - 2*t_symbocount)-2; k++ ) printf(" ");
-			printf("|");
-		}
-		printf("\n");
-	}
-	printf("\n---------------------------------------------------------\n");
+/* Free allocated space for specified NFA state */
+void free_NFA_state(struct NFA_state *state) {
+    free(state);
 }
 
-void printMappedDFA(struct dfaMatrix dfa[REMAX][REMAX], int new_states, int no_of_inputs, int symbolcount, char *inputs)
+/* get number of transitions going out from specified NFA state */
+int NFA_state_transition_num(const struct NFA_state *state)
 {
-	int i, j, k;
-
-	printf("\n--------------------DFA TABLE:\n");
-	printf("   ");
-	for( i = 1; i <= no_of_inputs; i++ ){
-		printf("| %c ", inputs[i-1]);
-	}
-	printf("\n");
-
-	for( i = 1; i <= 4*no_of_inputs; i++ ) printf("++");
-	printf("\n");
-
-	for( i = 1; i <= new_states; i++ ){
-		for( j = 0; j <= no_of_inputs; j++ ){
-			printf("%c  |", dfa[i][j].state);
-		}
-		printf("\n");
-	}
-	printf("\n---------------------------------------------------------\n");
+    if (state->transition[1].trans_type != NFATT_NONE) return 2;
+    if (state->transition[0].trans_type != NFATT_NONE) return 1;
+    else  return 0;
 }
 
-void printObjectDFA(struct dfaObject* targetDFA)
+/* Add another transition to specified NFA state, this function returns 0 on
+ * success, or it would return an -1 when there's already 2 transitions going
+ * out of this state */
+int NFA_state_add_transition(struct NFA_state *state,
+    enum NFA_transition_type trans_type, char trans_char,
+    struct NFA_state *to_state)
 {
-    struct dfaMatrix (*dfa)[REMAX] = targetDFA->dfa;
-    int symbolcount = targetDFA->symbolCount;
-    int no_of_inputs = targetDFA->noOfInputs, _new_states = targetDFA->newStates;
-    char* input = targetDFA->uniqueSymbols;
-	int i, j, k, t_symbocount = targetDFA->symbolCount;
-	symbolcount *= 3;
-
-	printf("\n--------------------DFA TABLE----------------------------\n");
-	for( i = 1; i <= symbolcount; i++ ) printf(" ");
-	for( i = 1; i <= no_of_inputs; i++ ){
-		printf("|");
-		for( j = 1; j <= symbolcount/2; j++ ) printf(" ");
-		printf("%c", input[i-1]);
-		for( j = 1; j <= symbolcount/2 - 1; j++ ) printf(" "); 
-	}
-	printf("\n");
-
-	for( i = 1; i <= (symbolcount*no_of_inputs); i++ ) printf("++");
-	printf("\n");
-	
-	for( i = 1; i <= _new_states; i++ ){
-		for( j = 0; j <= no_of_inputs; j++ ){
-			printf("[");
-			for( k = 1; k <= t_symbocount; k++ ) printf("%d,", dfa[i][j].set[k]);
-			printf("]");
-			for( k = 1; k <= (symbolcount - 2*t_symbocount)-2; k++ ) printf(" ");
-			printf("|");
-		}
-		printf("\n");
-	}
-	printf("\n---------------------------------------------------------\n");
+    int i_trans = NFA_state_transition_num(state);
+    if (i_trans >= 2)  return -1;  /* no empty slot avaliable */
+    else {
+        state->transition[i_trans].trans_type = trans_type;
+        state->transition[i_trans].trans_char = trans_char;
+        state->to[i_trans]                    = to_state;
+        return 0;
+    }
 }
 
-void printObjectMappedDFA(struct dfaObject* targetDFA)
+/* Add an epsilon transition from "from" to "to */
+int NFA_epsilon_move(struct NFA_state *from, struct NFA_state *to)
 {
-    struct dfaMatrix (*dfa)[REMAX] = targetDFA->dfa;
-    int symbolcount = targetDFA->symbolCount;
-    int no_of_inputs = targetDFA->noOfInputs, new_states = targetDFA->newStates;
-    char* inputs = targetDFA->uniqueSymbols;
-	int i, j, k;
-
-	printf("\n--------------------DFA TABLE----------------------------\n");
-	printf("   ");
-	for( i = 1; i <= no_of_inputs; i++ ){
-		printf("| %c ", inputs[i-1]);
-	}
-	printf("\n");
-
-	for( i = 1; i <= 4*no_of_inputs; i++ ) printf("++");
-	printf("\n");
-
-	for( i = 1; i <= new_states; i++ ){
-		for( j = 0; j <= no_of_inputs; j++ ){
-			printf("%c  |", dfa[i][j].state);
-		}
-		printf("\n");
-	}
-	printf("\n---------------------------------------------------------\n");
+    return NFA_state_add_transition(from, NFATT_EPSILON, 0, to);
 }
 
-//an utility function, will be used in transition matrix calculation...
-void constructSymbolTable(struct syntaxNode *root, char *st)
+/* DEBUGGING ROUTINE: dump specified NFA state to fp */
+void __dump_NFA_state(const struct NFA_state *state, FILE *fp)
 {
-	if( root == NULL ) return;
+    int n_trans = NFA_state_transition_num(state);
+    int i_trans = 0;
 
-	//traverse in LVR order to get the symbol order..
-	constructSymbolTable(root->leftchild, st);
-	constructSymbolTable(root->rightchild, st);
+    fprintf(fp, "num of transitions: %d\n", n_trans);
+    for ( ; i_trans < n_trans; i_trans++)
+    {
+        switch (state->transition[i_trans].trans_type)
+        {
+        case NFATT_CHARACTER:
+            fprintf(fp, "   alphabet transition: %c\n",
+                state->transition[i_trans].trans_char);
+            break;
 
-	//case: leaf node..
-	if( root->leftchild == NULL && root->rightchild == NULL ){
-		st[root->firstpos.poslist[0]] = root->data;
-	}
+        case NFATT_EPSILON:
+            fprintf(fp, "   epsilon transition\n");
+            break;
+
+        default:
+            fprintf(fp, "ERROR: You should never reach here\n");
+            abort();
+        }
+    }
 }
 
-int *move(int *a, int symbolcount, char ip, char *st)
+/* Create an NFA for recognizing single character */
+struct NFA NFA_create_atomic(char c)
 {
-	int i, j;
-	int *b = (int *)malloc((symbolcount+1) * sizeof(int));
-	for( i = 1; i <= symbolcount; i++ ){
-		if( a[i] == 1 ){
-			for(j = 1; j <= symbolcount; j++ ){
-				if( st[j] == ip && j == i ) b[i] = 1;
-			}
-		} 
-	}
-	return b;
+    struct NFA nfa;
+
+    nfa.start     = alloc_NFA_state();
+    nfa.terminate = alloc_NFA_state();
+
+    assert(c != '\0');
+    NFA_state_add_transition(nfa.start, NFATT_CHARACTER, c, nfa.terminate);
+
+    return nfa;
 }
 
-int *calculateTransition(int *a, struct dfaMatrix *bfp, int symbolcount)
+/* C = AB */
+struct NFA NFA_concatenate(const struct NFA *A, const struct NFA *B)
 {
-	int *b = (int *)malloc((symbolcount+1) * sizeof(int));
-	int i, j;
+    struct NFA C;
+    C.start     = A->start;
+    C.terminate = B->terminate;
 
-	for( i = 1; i <= symbolcount; i++ ){
-		if( a[i] == 1 ){
-			b = binMapUnion(b, bfp[i].set, symbolcount);
-		}
-	}
+    NFA_epsilon_move(A->terminate, B->start);
 
-	return b;
+    return C;
 }
 
-int isNewState(struct dfaMatrix *s, int t, int *k, int symbolcount)
+/* C = A|B */
+struct NFA NFA_alternate(const struct NFA *A, const struct NFA *B)
 {
-	int i, cnt = 0, j;
-	for( i = 1; i <= symbolcount; i++ ){
-		if( k[i] == 0 ) cnt++;
-	}
-	if( cnt >= symbolcount ) return 0;
-	
-	int *a = (int *)malloc((symbolcount+1) * sizeof(int));
+    struct NFA C;
+    C.start     = alloc_NFA_state();
+    C.terminate = alloc_NFA_state();
 
-	for( i = 0; i <= t; i++ ){
-		cnt = 0;
-		for( j = 1; j <= symbolcount; j++ ){
-			if( ( s[i].set[j] ^ k[j] ) == 0 ) cnt++;
-		}
-		if( cnt >= symbolcount ) return 0;
-	}
-	return 1;
+    NFA_epsilon_move(C.start,      A->start);
+    NFA_epsilon_move(C.start,      B->start);
+    NFA_epsilon_move(A->terminate, C.terminate);
+    NFA_epsilon_move(B->terminate, C.terminate);
+
+    return C;
 }
 
-int isSame(int *a, int *b, int symbolcount)
+/* C = A? = A|epsilon */
+struct NFA NFA_optional(const struct NFA *A)
 {
-	int i, cnt = 0;
-	for( i = 1; i <= symbolcount; i++ ){
-		if( a[i] == 0 ) cnt++;
-	}
-	if( cnt == symbolcount ) return -1;
+    struct NFA C;
+    C.start     = alloc_NFA_state();
+    C.terminate = A->terminate;
 
-	cnt = 0;
-	for( i = 1; i <= symbolcount; i++ ){
-		if( ( a[i] ^ b[i] ) == 0 ) cnt++;
-	}
-	if( cnt == symbolcount ) return 1;
-	return 0;
+    NFA_epsilon_move(C.start, A->start);
+    NFA_epsilon_move(C.start, A->terminate);
+
+    return C;
 }
 
-void printMappedStates(struct dfaObject* targetDFA)
+/* C = A* */
+struct NFA NFA_Kleene_closure(const struct NFA *A)
 {
-    struct dfaMatrix (*dfa)[REMAX] = targetDFA->dfa;
-    int symbolcount = targetDFA->symbolCount;
-    int new_states = targetDFA->newStates;
-    int i, j;
-	printf("\n--------------------MAPPED STATES------------------------\n");
-	for( i = 1; i <= new_states; i++ ){
-		printf(" %c = {", dfa[i][0].state);
-		for( j = 1; j <= symbolcount; j++ ){
-			if( dfa[i][0].set[j] == 1 ) printf("%d,", j);
-		}
-		printf("} ");
-	}
-	printf("\n---------------------------------------------------------\n");
+    struct NFA C;
+    C.start     = alloc_NFA_state();
+    C.terminate = alloc_NFA_state();
 
+    NFA_epsilon_move(A->terminate, C.start);
+    NFA_epsilon_move(C.start,      A->start);
+    NFA_epsilon_move(C.start,      C.terminate);
+
+    return C;
 }
 
-void mapDFA(struct dfaMatrix dfa[REMAX][REMAX], int symbolcount, int no_of_inputs, int new_states)
+/* C = A+ = AA* */
+struct NFA NFA_positive_closure(const struct NFA *A)
 {
-	int i, j, k, t;
-	char input = 'A';
+    struct NFA C;
+    C.start     = alloc_NFA_state();
+    C.terminate = alloc_NFA_state();
 
-	for( i = 1; i <= new_states; i++ ) dfa[i][0].state = input++;
+    NFA_epsilon_move(C.start,      A->start);
+    NFA_epsilon_move(A->terminate, C.start);
+    NFA_epsilon_move(A->terminate, C.terminate);
 
-	for( i = 1; i <= new_states; i++ ){
-		for( j = 1; j <= no_of_inputs; j++ ){
-			for( k = 1; k <= new_states; k++ ){
-				t = isSame(dfa[i][j].set, dfa[k][0].set, symbolcount);
-				if( t == -1 ) dfa[i][j].state = '_';
-				else if( t == 1 ){
-					dfa[i][j].state = dfa[k][0].state;
-					break;
-				}
-			}
-		}
-	}
+    return C;
 }
 
-//an utility to mark initial and final states..
-char *markFinal(struct dfaMatrix dfa[REMAX][REMAX], int *final_state_count, int new_states, int symbolcount)
+/* Traverse the NFA while recording addresses of all states in a generic
+ * list */
+static void __NFA_traverse(
+    struct NFA_state *state, struct generic_list *visited)
 {
-	int i, j;
-	char *f = (char *)malloc(new_states * sizeof(char));
-
-	for( i = 1; i <= new_states; i++ ){
-		for( j = 1; j <= symbolcount; j++ ){
-			if( dfa[i][0].set[j] == 1 && j == (symbolcount) ){
-				//printf("%c ", dfa[i][0].state);
-				f[(*final_state_count)++] = dfa[i][0].state;
-				break;
-			}
-		}
-	}
-	return f;
+    int i_to = 0, n_to = NFA_state_transition_num(state);
+    for ( ; i_to < n_to; i_to++)
+    {
+        /* DFS of graphs */
+        if (generic_list_add(
+                visited, &state->to[i_to], __cmp_addr_int_ptr) != 0) {
+            __NFA_traverse(state->to[i_to], visited);
+        }
+    }
 }
 
-//an utility to save dfa in a text..
-void saveDFA(struct dfaMatrix dfa[REMAX][REMAX], int new_states, int no_of_inputs, int final_state_count, char *inputs, char *final_states)
+/* Free an NFA */
+void NFA_dispose(struct NFA *nfa)
 {
-	int i, j;
-	FILE *fp = fopen("dfa.txt", "w");
-	if( fp == NULL ){
-		//printf("Error! opening dfa.txt");
-		return;
-	}
-	
-	//printf("\nSaving DFA to file...\n");
-	fprintf(fp, "%d", new_states);
-	fputc(' ', fp);
-	fprintf(fp, "%d", no_of_inputs);
-	fputc(' ', fp);
-	fprintf(fp, "%d", final_state_count);
-	fputc('\n', fp);
+    struct generic_list visited;
 
-	for( i = 1; i <= new_states; i++ ){
-		fputc(dfa[i][0].state, fp);
-		fputc(' ', fp);
-	}
-	fputc('\n', fp);
-	
-	for( i = 0; i < no_of_inputs; i++ ){
-		fputc(inputs[i], fp);
-		fputc(' ', fp);
-	}
-	fputc('\n', fp);
-	
-	for( i = 0; i < final_state_count; i++ ){
-		fputc(final_states[i], fp);
-		fputc(' ', fp);
-	}
-	fputc('\n', fp);
-	
-	for( i = 1; i <= new_states; i++ ){
-		for( j = 1; j <= no_of_inputs; j++ ){
-			fputc(dfa[i][j].state, fp);
-			fputc(' ', fp);
-		}
-		fputc('\n', fp);
-	}
-	
+    struct NFA_state **cur;
+    int i_state = 0;
+
+    /* traverse the NFA and record all states in a generic list */
+    create_generic_list(struct NFA_state*, &visited);
+    generic_list_push_back(&visited, &nfa->start);
+    __NFA_traverse(nfa->start, &visited);
+
+    /* free all states */
+    for (cur = (struct NFA_state**) visited.p_dat;
+         i_state < visited.length; i_state++, cur++)
+    {
+        free_NFA_state(*cur);
+    }
+
+    destroy_generic_list(&visited);
+}
+/*******************************************************************************
+******************                DFA Function                ******************
+*******************************************************************************/
+
+/* Other DFA corresponding functions */
+
+static struct __DFA_state_set *__alloc_stateset_node(void)
+{
+    struct __DFA_state_set *new_node = 
+        (struct __DFA_state_set *) malloc(sizeof(struct __DFA_state_set));
+
+    new_node->prev = new_node->next = NULL;
+    new_node->dfa_states.length = 0;
+    new_node->merged_state = NULL;
+
+    return new_node;
 }
 
-void calculateTransitionTable(struct dfaMatrix dfa[REMAX][REMAX], struct syntaxNode *root, char *st, int symbolcount, struct followpos_matrix *fp, int no_of_inputs, int *ns, char *input)
+static struct __DFA_state_set *__create_empty_stateset_list(void)
 {
-	/*
-		RULE:
-			1. mark firstpos of root as new initial state
-			2. calculate transition for new state for each input
-			3. repeat step 2 until no new state is found
-	*/
-	struct dfaMatrix binFP[symbolcount+1], stack[REMAX];//stack to keep track of all the marked states...
+    struct __DFA_state_set *head = __alloc_stateset_node();
+    head->prev = head->next = head;
 
-	int i, j, top = -1, new_state_count;
-	int prev_state;
-
-	for( i = 1; i <= symbolcount; i++ ) binFP[i].set = toBinaryMap(fp[i].set, fp[i].setCount, symbolcount);
-
-	(*ns)++;
-	prev_state = (*ns);
-	int *t = toBinaryMap(root->firstpos.poslist, root->firstpos.poscount, symbolcount);
-	stack[++top].set = t;
-	dfa[(*ns)][0].set = t;
-	for( i = 1; i <= no_of_inputs; i++ ){
-		int *a = move(dfa[(*ns)][0].set, symbolcount, input[i-1], st);
-		int *b = calculateTransition(a, binFP, symbolcount);
-		dfa[(*ns)][i].set = b;
-	}
-	
-	while( 1 ){
-		new_state_count = 0;
-
-		for( i = 1; i <= no_of_inputs; i++ ){
-
-			if( isNewState(stack, top, dfa[prev_state][i].set, symbolcount) ){
-				stack[++top].set = dfa[prev_state][i].set;
-				(*ns)++;
-				dfa[(*ns)][0].set = dfa[prev_state][i].set;
-				for( j = 1; j <= no_of_inputs; j++ ){
-					int *a = move(dfa[(*ns)][0].set, symbolcount, input[j-1], st);
-					int *b = calculateTransition(a, binFP, symbolcount);
-					dfa[(*ns)][j].set = b;
-				}
-			}
-			else new_state_count++;
-		}
-
-		if( new_state_count >= no_of_inputs && prev_state == (*ns) ) break;
-		prev_state++;
-	}
-
-	mapDFA(dfa, symbolcount, no_of_inputs, (*ns));
-	//printDFA(dfa, symbolcount, no_of_inputs, input, (*ns));
-	//printMappedDFA(dfa, (*ns), no_of_inputs, symbolcount, input);
-	int final_state_count = 0;
-	char *final_states = markFinal(dfa, &final_state_count, (*ns), symbolcount);
-
-	// printf("\n----Final states--------------------\n");
-	// for( i = 0; i < final_state_count; i++ ) printf("%c ", final_states[i]);
-	// printf("\n------------------------------------\n");
-
-    // saveDFA(dfa, (*ns), no_of_inputs, final_state_count, input, final_states);
+    return head;
 }
-//transition table calculation end=====================================================================================================
 
-
-// Main Function
-/*
-int main(int argc, char *argv[])
+static void __free_DFA_state_set(struct __DFA_state_set *state_set)
 {
-	int i;
-	if(argc>2)
-	{
-		//printf("More than 1 argument\n");
-		
-		//for (i=0; i<argc; i++)
-  		//printf("%s\n", argv[i]);
-  
-		return -2;
-	}
-	char REstring[REMAX];
-    struct dfaMatrix dfa[REMAX][REMAX];
-	strcpy(REstring,argv[1]);
-	printf("\nSupported Characters: \n'a-d','f-z','A-Z',\n'e' for epsilon, '*','|','(',')'\n");
-	printf("The RE entered:\n'%s'\n",REstring);
+    destroy_generic_list(&state_set->dfa_states);
+    free(state_set);
+}
 
-	int new_states = 0;
-	char *st;
-	struct followpos_matrix *fp;
-	struct tokenArray *MainTokenArray=NULL;
-	int symbolcountcurr = 0,symbolcount, uniqueSymbolCount;
-	char uniqueSymbols[300];
-    struct syntaxNode *syntaxRoot=NULL;
+static void __destroy_DFA_stateset_list(struct __DFA_state_set *head)
+{
+    struct __DFA_state_set *cur = head->next, *next;
+    free(head);           /* free head node first  */
 
-	if(normalizeRE(REstring))
-	{
-		printf("\nWrong Regular Expression! Program Terminated!\n");
-		return -1;
-	}
-	printf("The normalized RE:\n'%s'\n",REstring);
-	FILE *fpb=fopen("RE.txt","w");
-	fprintf(fpb,"%s",REstring);
-	symbolcount = countSymbols(REstring, &uniqueSymbolCount,uniqueSymbols);
-	printf("The number of symbols is: %d\n",symbolcount);
+    /* then free the rest of the list */
+    for ( ; cur != head; cur = next)
+    {
+        next = cur->next;
+        __free_DFA_state_set(cur);
+    }    
+}
 
-	if(symbolcount<=1)
-	{
-		printf("\nRE empty!! Program Terminated!\n");
-		return 0;
-	}
-	
-	MainTokenArray = parseAndStoreTokens(REstring);
-	printf("\nThe tokenised array:\n");
-	printTokenArray(MainTokenArray);
-	
-	syntaxRoot = syntaxTreeBuilder(MainTokenArray,&symbolcountcurr,symbolcount);
-	
-	nullable(syntaxRoot);
-	firstpos_lastpos(syntaxRoot,symbolcount);
+static struct __DFA_state_set *__find_state_set(
+    struct __DFA_state_set *ll_head, const struct DFA_state *state)
+{
+    struct __DFA_state_set *cur = ll_head->next;
+    for ( ; cur != ll_head; cur = cur->next)
+    {
+        if (generic_list_find(&cur->dfa_states,
+                              &state, __cmp_addr_DFA_state_ptr) != NULL) {
+            return cur;
+        }
+    }
 
-	st = initSymbolArray(symbolcount);
-	constructSymbolTable(syntaxRoot, st);
-	printSymbolTable(st, symbolcount);
+    return NULL;
+}
 
-	printSyntaxTree(syntaxRoot);
+static void __insert_DFA_state_set_after(
+    struct __DFA_state_set *e, struct __DFA_state_set *pivot)
+{
+    e->prev = pivot;
+    e->next = pivot->next;
+    pivot->next->prev = e;
+    pivot->next = e;
+}
 
-	fp = initFollowposMatrix(symbolcount);
-	calculateFollowpos(syntaxRoot, symbolcount, fp);
-	printFollowpos(fp, symbolcount);
-	saveSyntaxTree(syntaxRoot);
-	calculateTransitionTable(dfa, syntaxRoot, st, symbolcount, fp, uniqueSymbolCount-1, &new_states, uniqueSymbols);
-	return 1;
-}//End of Main Function
+static void __insert_states_after(
+    const struct generic_list *states, struct __DFA_state_set *pivot)
+{
+    struct __DFA_state_set *new_node = __alloc_stateset_node();
+
+    new_node->dfa_states = *states;
+    __insert_DFA_state_set_after(new_node, pivot);
+}
+
+static void __remove_DFA_state_set(struct __DFA_state_set *state_set)
+{
+    state_set->prev->next = state_set->next;
+    state_set->next->prev = state_set->prev;
+    
+    __free_DFA_state_set(state_set);
+}
+
+/* Create a new DFA state and bind it with specified set of NFA states */
+static void __create_dfa_state_entry(
+    const struct generic_list *states, struct __dfa_state_entry *entry)
+{
+    /* the dfa state entry object keeps a copy of NFA state labels (addrs) and
+     * sort these labels for fast set comparisons */
+    generic_list_duplicate(&entry->nfa_states, states);
+    qsort(
+        entry->nfa_states.p_dat,
+        entry->nfa_states.length,
+        entry->nfa_states.elem_size,
+        __cmp_addr_NFA_state_ptr);
+
+    /* create a new DFA state for this set of NFA states */
+    entry->dfa_state = alloc_DFA_state();
+}
+
+/* Free memory allocated for the entry object */
+static void __destroy_dfa_state_entry(struct __dfa_state_entry *entry) {
+    destroy_generic_list(&entry->nfa_states);
+}
+
+/* compare if two generic lists are equivalent:
+     (set(label_a) == set(label_b))
 */
+static int __cmp_dfa_state_entry(const void *a_, const void *b_)
+{
+    struct NFA_state **sa, **sb;
+    int i = 0, length;
 
-int re2dfa(char* originREString, struct dfaObject* targetDFA) {
-	char reString[REMAX];
-	int newStates = 0;
-	char* st;
-	struct followpos_matrix* fp;
-	struct tokenArray* mainTokenArray = NULL;
-	int symbolCountCurr = 0;
-    int symbolCount, uniqueSymbolCount;
-	char* uniqueSymbols = targetDFA->uniqueSymbols;
-    struct syntaxNode* syntaxRoot = NULL;
-    struct dfaMatrix (*dfa)[REMAX] = targetDFA->dfa;
+    struct __dfa_state_entry *a = (struct __dfa_state_entry*) a_;
+    struct __dfa_state_entry *b = (struct __dfa_state_entry*) b_;
 
-	strcpy(reString, originREString);
-	if (normalizeRE(reString)) {
-		printf("\nWrong Regular Expression! Program Terminated!\n");
-		return -1;
-	}
+    struct generic_list *label_a = &a->nfa_states;
+    struct generic_list *label_b = &b->nfa_states;
 
-	symbolCount = countSymbols(reString, &uniqueSymbolCount, uniqueSymbols);
-	if (symbolCount <= 1) {
-		printf("\nRE empty!! Program Terminated!\n");
-		return -2;
-	}
-	
-	mainTokenArray = parseAndStoreTokens(reString);
-	
-	syntaxRoot = syntaxTreeBuilder(
-        mainTokenArray, &symbolCountCurr, symbolCount
-    );
-	nullable(syntaxRoot);
-	firstpos_lastpos(syntaxRoot, symbolCount);
+    if (label_a->length != label_b->length) return 1;   /* not equal */
 
-	st = initSymbolArray(symbolCount);
-	constructSymbolTable(syntaxRoot, st);
+    /* compare the elements of the states label list */
+    length = label_a->length;
+    for (sa = (struct NFA_state **)label_a->p_dat,
+             sb = (struct NFA_state **)label_b->p_dat;
+         i < length; i++, sa++, sb++)
+    {
+        if (*sa != *sb) return 1;
+    }
 
-	fp = initFollowposMatrix(symbolCount);
-	calculateFollowpos(syntaxRoot, symbolCount, fp);
-	calculateTransitionTable(
-        dfa, syntaxRoot, st, symbolCount, fp,
-        uniqueSymbolCount - 1, &newStates, uniqueSymbols
-    );
-
-    targetDFA->symbolCount = symbolCount;
-    targetDFA->noOfInputs = uniqueSymbolCount - 1;
-    targetDFA->newStates = newStates;
-
-	return 0;
+    return 0;  /* a_ == b_ */
 }
 
-// End of Program
+/* Calculate the epsilon closure of specified state, all states in the
+ * resulting closure are appended to the visited list */
+static void __NFA_state_epsilon_closure(
+    const struct NFA_state *state, struct generic_list *visited)
+{
+    int i_trans = 0, n_trans = NFA_state_transition_num(state);
+
+    for ( ; i_trans < n_trans; i_trans++)
+    {
+        if (state->transition[i_trans].trans_type == NFATT_EPSILON)
+        {
+            /* storm down if we have not visited this state yet */
+            if (generic_list_add(
+                visited, &state->to[i_trans], __cmp_addr_NFA_state_ptr) != 0) {
+                __NFA_state_epsilon_closure(state->to[i_trans], visited);
+            }
+        }
+    }
+}
+
+/* Figure out the epsilon closure of a set of states. */
+static void __NFA_epsilon_closure(struct generic_list *states)
+{
+    const struct NFA_state *state;
+    int i_state = 0, n_state = states->length;
+
+    for ( ; i_state < n_state; i_state++)
+    {
+        /* states->p_dat might be relocated while appending more elements */
+        state = *(((const struct NFA_state**) states->p_dat) + i_state);
+        __NFA_state_epsilon_closure(state, states);
+    }
+}
+
+/* Get all possible transitions from specified set of states */
+static void __NFA_collect_transition_chars(
+    struct generic_list *states, struct generic_list *trans_char)
+{
+    struct NFA_state **s = (struct NFA_state**) states->p_dat;
+
+    int i_state = 0, i_trans;
+    int n_states = states->length, n_trans;
+
+    for ( ; i_state < n_states; i_state++, s++)
+    {
+        n_trans = NFA_state_transition_num(*s);
+        for (i_trans = 0; i_trans < n_trans; i_trans++)
+        {
+            if ((*s)->transition[i_trans].trans_type == NFATT_CHARACTER)
+            {
+                generic_list_add(
+                    trans_char,
+                    &((*s)->transition[i_trans].trans_char),
+                    __cmp_char_char);
+            }
+        }
+    }
+}
+
+/* Get all possible successor states under transition c to a set of given
+ * states */
+static void __NFA_collect_target_states(
+    struct generic_list *states, char c, struct generic_list *new_states)
+{
+    struct NFA_state **s = (struct NFA_state**) states->p_dat;
+
+    int i_state = 0, i_trans;
+    int n_states = states->length, n_trans;
+
+    for ( ; i_state < n_states; i_state++, s++)
+    {
+        n_trans = NFA_state_transition_num(*s);
+        for (i_trans = 0; i_trans < n_trans; i_trans++)
+        {
+            if ((*s)->transition[i_trans].trans_type == NFATT_CHARACTER &&
+                (*s)->transition[i_trans].trans_char == c)
+            {
+                generic_list_add(
+                    new_states, &((*s)->to[i_trans]), __cmp_addr_NFA_state_ptr);
+            }
+        }
+    }
+}
+
+static struct DFA_state *__get_DFA_state_address(
+    struct generic_list *dfa_state_entry_list,
+    const struct generic_list *states, int *is_new_entry)
+{
+    struct __dfa_state_entry entry, *addr;
+    __create_dfa_state_entry(states, &entry);
+
+    /* search in all logged entries first */
+    addr = (struct __dfa_state_entry *)
+        generic_list_find(dfa_state_entry_list, &entry, __cmp_dfa_state_entry);
+
+    if (addr == NULL)    /* not found, we need to add a new entry/DFA state */
+    {
+        *is_new_entry = 1;
+        generic_list_push_back(dfa_state_entry_list, &entry);
+        return entry.dfa_state;
+    }
+    else                 /* entry/DFA state already exists */
+    {
+        *is_new_entry = 0;
+        __destroy_dfa_state_entry(&entry);
+        free_DFA_state(entry.dfa_state);
+        return addr->dfa_state;
+    }
+}
+
+/* Mark DFA states containing the terminate state of NFA as acceptable */
+static void __mark_acceptable_states(
+    const struct NFA_state *terminator,
+    struct generic_list *dfa_state_entry_list)
+{
+    struct __dfa_state_entry *entry;
+
+    int i_entry = 0;
+    for (entry = (struct __dfa_state_entry *) dfa_state_entry_list->p_dat;
+         i_entry < dfa_state_entry_list->length; i_entry++, entry++)
+    {
+        /* check if the terminator of NFA is merged into this DFA state */
+        if (generic_list_find(
+            &entry->nfa_states, &terminator, __cmp_addr_NFA_state_ptr) != NULL)
+        {
+            /* if so, this DFA state becomes acceptable */
+            DFA_make_acceptable(entry->dfa_state);
+        }
+    }
+}
+
+static void __NFA_to_DFA_rec(
+    struct generic_list *states,
+    struct generic_list *dfa_state_entry_list)
+{
+    struct generic_list trans_char, new_states;
+    struct DFA_state *from, *to;
+    int  i_char = 0;
+    int  if_rec, dummy;  /* if this state has already been created */
+    char *c;
+
+    create_generic_list(char, &trans_char);
+    create_generic_list(struct NFA_state*, &new_states);
+
+    /* get all transition characters in states, we gonna storm each way down in
+     * the next for loop. */
+    __NFA_collect_transition_chars(states, &trans_char);
+
+    for (c = (char*)trans_char.p_dat;
+         i_char < trans_char.length; i_char++, c++)
+    {
+        /* get the epsilon closure of target states under transition *c */
+        __NFA_collect_target_states(states, *c, &new_states);
+        __NFA_epsilon_closure(&new_states);
+
+        /* Here we need to add states and new_states to the DFA, and connect
+         * them together with transition. */
+        from = __get_DFA_state_address(dfa_state_entry_list, states, &dummy);
+        to   = __get_DFA_state_address(dfa_state_entry_list, &new_states, &if_rec);
+        DFA_add_transition(from, to, *c);
+
+        /* DFS: storm down this way and get its all successor states */
+        if (if_rec)
+            __NFA_to_DFA_rec(&new_states, dfa_state_entry_list);
+
+        generic_list_clear(&new_states);
+    }
+
+    destroy_generic_list(&trans_char);
+    destroy_generic_list(&new_states);
+}
+
+/* Convert an NFA to DFA, this function returns the start state of the
+ * resulting DFA */
+struct DFA_state *NFA_to_DFA(const struct NFA *nfa)
+{
+    int i_list = 0;
+    struct generic_list start_states;
+    struct generic_list dfa_state_entry_list;
+    struct DFA_state *dfa_start_state;
+
+    create_generic_list(struct NFA_state*, &start_states);
+    create_generic_list(struct __dfa_state_entry, &dfa_state_entry_list);
+
+    /* recursive: we start from the epsilon closure of the start state and
+     * storm all the way down. */
+    generic_list_push_back(&start_states, &nfa->start);
+    __NFA_epsilon_closure(&start_states);
+    __NFA_to_DFA_rec(&start_states, &dfa_state_entry_list);
+
+    /* mark DFA states containing the terminate state of NFA as acceptable */
+    __mark_acceptable_states(nfa->terminate, &dfa_state_entry_list);
+
+    /* start state of generated DFA should be the first created one */
+    dfa_start_state =
+        ((struct __dfa_state_entry*) dfa_state_entry_list.p_dat)[0].dfa_state;
+
+    /* The final clean ups */
+    for ( ; i_list < dfa_state_entry_list.length; i_list++)
+    {
+        /* we need to destroy all sublists */
+        __destroy_dfa_state_entry(
+            ((struct __dfa_state_entry *) dfa_state_entry_list.p_dat) + i_list);
+    }
+
+    destroy_generic_list(&start_states);
+    destroy_generic_list(&dfa_state_entry_list);
+
+    return dfa_start_state;
+}
+
+/* Create an empty (isolated), non-acceptable state */
+struct DFA_state *alloc_DFA_state(void)
+{
+    struct DFA_state *state =
+        (struct DFA_state*)malloc(sizeof(struct DFA_state));
+
+    state->_capacity = 4;
+    state->n_transitions = 0;   /* isolated  */
+    state->is_acceptable = 0;   /* non-acceptable */
+    state->trans = (struct DFA_transition*)malloc(
+        state->_capacity * sizeof(struct DFA_transition));
+
+    return state;
+}
+
+/* Free allocated space for specified DFA state */
+void free_DFA_state(struct DFA_state *state)
+{
+    free(state->trans);         /* free array of transitions */
+    free(state);                /* free the state object */
+}
+
+/* Traverse from specified state and add all reachable states to a generic
+ * list */
+void DFA_traverse(
+    struct DFA_state *state, struct generic_list *visited)
+{
+    int i_trans = 0, n_trans = state->n_transitions;
+    for ( ; i_trans < n_trans; i_trans++)
+    {
+        /* DFS */
+        if (generic_list_add(
+            visited, &state->trans[i_trans].to, __cmp_addr_DFA_state_ptr
+            ) != 0) {
+            DFA_traverse(state->trans[i_trans].to, visited);
+        }
+    }
+}
+
+/* stuff all transition characters emitted by specified state to trans_chars */
+static void __DFA_state_collect_transition_chars(
+    const struct DFA_state *state, struct generic_list *trans_chars)
+{
+    int i_trans = 0;
+    for ( ; i_trans < state->n_transitions; i_trans++)
+    {
+        generic_list_add(
+            trans_chars, &state->trans[i_trans].trans_char,
+            __cmp_char_char);
+    }
+}
+
+/* Collect all transition chars of states in specified state set */
+static void DFA_states_collect_transition_chars(
+    const struct generic_list *states, struct generic_list *trans_chars)
+{
+    struct DFA_state **state = (struct DFA_state **) states->p_dat;
+    int i_state = 0, n_states = states->length;
+
+    for ( ; i_state < n_states; i_state++, state++) {
+        __DFA_state_collect_transition_chars(*state, trans_chars);
+    }
+}
+
+/* Initialize 2 state sets for DFA optimization process, one for all
+ * non-acceptable states, one for the rest of them (acceptable states). */
+static struct __DFA_state_set *initialize_DFA_state_set(
+    struct DFA_state *dfa_start)
+{
+    int i_state = 0, n_state;
+    struct generic_list state_list, acceptable, nonacceptable;
+    struct DFA_state **state;
+    struct __DFA_state_set *ll_state_set = __create_empty_stateset_list();
+
+    create_generic_list(struct DFA_state *, &state_list);
+    create_generic_list(struct DFA_state *, &acceptable);
+    create_generic_list(struct DFA_state *, &nonacceptable);
+
+    /* get all states in the DFA */
+    generic_list_push_back(&state_list, &dfa_start);
+    DFA_traverse(dfa_start, &state_list);
+
+    /* Initialize state sets by placing all acceptable states to the acceptable
+     * list, non-acceptable states goes to nonacceptable list */
+    n_state = state_list.length;
+    for (state = (struct DFA_state **) state_list.p_dat;
+         i_state < n_state; i_state++, state++)
+    {
+        (*state)->is_acceptable ?
+            generic_list_push_back(&acceptable,    state):
+            generic_list_push_back(&nonacceptable, state);
+    }
+
+    /* we've done constructing the 2 initial state sets */
+    (acceptable.length != 0) ?
+        __insert_states_after(&acceptable, ll_state_set):
+        destroy_generic_list(&acceptable);
+
+    (nonacceptable.length != 0) ?
+        __insert_states_after(&nonacceptable, ll_state_set):
+        destroy_generic_list(&nonacceptable);
+
+    destroy_generic_list(&state_list);
+    return ll_state_set;
+}
+
+/* Split state_set to 2 distinguishable state sets by looking at if states in
+ * state_set are distinguishable under transition c
+
+                   c   state_split_0
+       state_set ----<
+                       state_split_1
+ */
+static int split_distinguishable_states(
+    struct __DFA_state_set *ll_head,
+    struct __DFA_state_set *state_set, char c)
+{
+    struct generic_list state_split_0, state_split_1;
+
+    struct DFA_state
+        **state = (struct DFA_state**)(state_set->dfa_states.p_dat),
+        *target;
+
+    struct __DFA_state_set *ref;
+
+    int i_state = 0, n_states = state_set->dfa_states.length;
+
+    create_generic_list(struct DFA_state *, &state_split_0);
+    create_generic_list(struct DFA_state *, &state_split_1);
+
+    /* use the first state as reference state, all states transiting to ref
+     * goes to state_split_0, otherwise pushed to state_split_1 */
+    ref = __find_state_set(ll_head, DFA_target_of_trans(*state, c));
+    generic_list_push_back(&state_split_0, state);
+
+    i_state++, state++;
+    for ( ; i_state < n_states; i_state++, state++)
+    {
+        target = DFA_target_of_trans(*state, c);
+
+        if (ref != NULL)
+            if (target != NULL)
+                /* test if this state is distinguishable with ref state under
+                 * transition c */
+                ref == __find_state_set(ll_head, target) ?
+                    generic_list_push_back(&state_split_0, state):
+                    generic_list_push_back(&state_split_1, state);
+
+            else   /* no such transition, distinguishable */
+                generic_list_push_back(&state_split_1, state);
+
+        else
+            target != NULL ?
+                generic_list_push_back(&state_split_1, state):
+                generic_list_push_back(&state_split_0, state);
+    }
+
+    /* we're done splitting the state set, now it's time to submit our
+     * changes */
+    if (state_split_1.length != 0) /* if we really splitted state_set to 2
+                                    * distinguishable states */
+    {
+        __insert_states_after(&state_split_1, state_set);
+        __insert_states_after(&state_split_0, state_set);
+        __remove_DFA_state_set(state_set);
+        return 1;
+    }
+    else                        /* not splitted, no change to commit */
+    {
+        destroy_generic_list(&state_split_0);
+        destroy_generic_list(&state_split_1);
+        return 0;
+    }
+}
+
+/* Split the state set into 2 distinguishable sets, splitted sets might also be
+ * splitable. */
+static int split_state_set(
+    struct __DFA_state_set *ll_head, struct __DFA_state_set *state_set)
+{
+    struct generic_list trans_chars;
+    int i_char = 0, n_chars;
+    char *c;
+
+    create_generic_list(char, &trans_chars);
+    DFA_states_collect_transition_chars(&state_set->dfa_states, &trans_chars);
+
+    /* investigate every possible transitions to find distinguishable states */
+    n_chars = trans_chars.length;
+    for (c = (char*)trans_chars.p_dat; i_char < n_chars; i_char++, c++)
+    {
+        if (split_distinguishable_states(ll_head, state_set, *c))
+        {
+            /* distinguishable state found and splitted, return immediately
+             * instead of doing more splits  */
+            destroy_generic_list(&trans_chars);
+            return 1;
+        }
+    }
+
+    /* no distinguishable transition/states found */
+    destroy_generic_list(&trans_chars);
+    return 0;
+}
+
+/* Merge undistinguishable states in specified DFA to state sets */
+static struct __DFA_state_set *merge_DFA_states(struct DFA_state *dfa)
+{
+    struct __DFA_state_set *ss = initialize_DFA_state_set(dfa);
+    struct __DFA_state_set *cur, *next;
+    int changed;
+
+    do {
+        changed = 0;
+        for (cur = ss->next; cur != ss; cur = next)
+        {
+            next = cur->next;
+            changed += split_state_set(ss, cur);
+        }
+    } while (changed != 0);
+
+    return ss;
+}
+
+/* Make DFA out of specified collection of state sets */
+static struct DFA_state *make_optimized_DFA(
+    struct __DFA_state_set *head, struct DFA_state *start)
+{
+    struct __DFA_state_set *cur = head->next, *dest;
+    struct DFA_state **cur_state;
+    int i_state, n_state;
+    int i_trans;
+    char trans_char;
+
+    /* allocate DFA state for each merged states */
+    for ( ; cur != head; cur = cur->next) {
+        cur->merged_state = alloc_DFA_state();
+    }
+
+    /* add transitions to these merged states */
+    for (cur = head->next ; cur != head; cur = cur->next)
+    {
+        cur_state = (struct DFA_state **) cur->dfa_states.p_dat;
+        n_state   = cur->dfa_states.length;
+
+        for (i_state = 0; i_state < n_state; i_state++, cur_state++)
+        {
+            for (i_trans = 0; i_trans < (*cur_state)->n_transitions; i_trans++)
+            {
+                dest = __find_state_set(head, (*cur_state)->trans[i_trans].to);
+                trans_char = (*cur_state)->trans[i_trans].trans_char;
+
+                if (DFA_target_of_trans(cur->merged_state, trans_char) == NULL)
+                {
+                    DFA_add_transition(
+                        cur->merged_state, dest->merged_state, trans_char);
+                }
+            }
+
+            if ((*cur_state)->is_acceptable)
+                DFA_make_acceptable(cur->merged_state);
+        }
+    }
+
+    /* find the start state of the new DFA and return */
+    return __find_state_set(head, start)->merged_state;
+}
+
+/* Simplify DFA by merging undistinguishable states */
+struct DFA_state *DFA_optimize(const struct DFA_state *dfa)
+{
+    struct DFA_state *_dfa = (struct DFA_state *) dfa;
+    struct __DFA_state_set *ss = merge_DFA_states(_dfa);
+    struct DFA_state *dfa_opt = make_optimized_DFA(ss, _dfa);
+    __destroy_DFA_stateset_list(ss);
+    return dfa_opt;
+}
+/* Destroy the entire DFA */
+void DFA_dispose(struct DFA_state *start)
+{
+    struct generic_list state_list;
+    struct DFA_state **cur;
+    int i_state = 0;
+
+    create_generic_list(struct DFA_state*, &state_list);
+    generic_list_push_back(&state_list, &start);
+    DFA_traverse(start, &state_list);
+
+    for (cur = (struct DFA_state**) state_list.p_dat;
+         i_state < state_list.length; i_state++, cur++)
+    {
+        free_DFA_state(*cur);
+    }
+
+    destroy_generic_list(&state_list);
+}
+
+/* Turn specified DFA state to an acceptable one */
+void DFA_make_acceptable(struct DFA_state *state)
+{
+    state->is_acceptable = 1;
+}
+
+/* Add transition between specified DFA states
+
+       /----\  trans_char  /--\
+       |from|------------>>|to|
+       \----/              \--/
+*/
+void DFA_add_transition(
+    struct DFA_state *from, struct DFA_state *to, char trans_char)
+{
+    /* If we're running out of space */
+    if (from->n_transitions == from->_capacity)
+    {
+        from->_capacity *= 2;   /* expand two-fold */
+        from->trans = (struct DFA_transition*)realloc(
+            from->trans, from->_capacity * sizeof(struct DFA_transition));
+    }
+
+    /* add transition */
+    from->trans[from->n_transitions].to = to;
+    from->trans[from->n_transitions].trans_char = trans_char;
+
+    from->n_transitions++;
+}
+
+/* Get the target state of specified state under certain transition, if there's
+ * no such transition then NULL is returned */
+struct DFA_state *DFA_target_of_trans(struct DFA_state *state, char trans_char)
+{
+    /* we have to iterate through all transitions to find the one we want */
+    int i_trans = 0, n_trans = state->n_transitions;
+
+    /* , so here we have to do a bad linear search */
+    for ( ; i_trans < n_trans; i_trans++)
+    {
+        if (state->trans[i_trans].trans_char == trans_char) {
+            return state->trans[i_trans].to;  /* transition found */
+        }
+    }
+
+    return NULL;                /* we haven't found specified transition */
+}
+
+/* dump the transitions to *all reachable* states from specified state */
+static void __DFA_reachable_states_dump_graphviz(
+    const struct DFA_state *state, struct generic_list *visited, FILE *fp)
+{
+    /* we'll storm down each way (transition) and dump each target state
+     * recursively */
+    int n_trans = state->n_transitions;
+    int i_trans = 0;
+
+    for ( ; i_trans < n_trans; i_trans++)
+    {
+        /* dump source state and target state, acceptable states are presented
+         * as double circles */
+        if (state->is_acceptable)   /* source state */
+            fprintf(fp,
+                "    node [shape = doublecircle label=\"\"]; addr_%p\n",
+                (void*)state);      /* target state */
+
+        if (state->trans[i_trans].to->is_acceptable)
+            fprintf(fp,
+                "    node [shape = doublecircle label=\"\"]; addr_%p\n",
+                (void*)state->trans[i_trans].to);
+
+        fprintf(fp, "    node [shape = circle label=\"\"]\n");
+
+        /* if (state->is_acceptable)   /\* source state *\/ */
+        /*     fprintf(fp, */
+        /*         "    node [shape = doublecircle label=\"%p\"]; addr_%p\n", */
+        /*         (void*) state, (void*) state);      /\* target state *\/ */
+        /* else */
+        /*     fprintf(fp, "    node [shape = circle label=\"%p\"]; addr_%p\n",  */
+        /*         (void*) state, (void*) state); */
+
+        /* if (state->trans[i_trans].to->is_acceptable) */
+        /*     fprintf(fp, */
+        /*         "    node [shape = doublecircle label=\"%p\"]; addr_%p\n", */
+        /*         (void*)state->trans[i_trans].to, */
+        /*         (void*)state->trans[i_trans].to); */
+        /* else */
+        /*     fprintf(fp, "    node [shape = circle label=\"%p\"]; addr_%p\n",  */
+        /*         (void*)state->trans[i_trans].to, */
+        /*         (void*)state->trans[i_trans].to); */
+
+        /* dump the transition from source state and target state */
+        fprintf(fp, "    addr_%p -> addr_%p [ label = \"%c\" ]\n",
+            (void*) state,
+            (void*) state->trans[i_trans].to,
+            state->trans[i_trans].trans_char);
+
+        /* dump the successor states of this target state (in recursive
+         * fashion) */
+        if (generic_list_add(
+            visited, &state->trans[i_trans].to, __cmp_addr_DFA_state_ptr) != 0)
+        {
+            __DFA_reachable_states_dump_graphviz(
+                state->trans[i_trans].to, visited, fp);
+        }
+    }
+}
+
+/* Generate DOT code to vizualize the DFA */
+void DFA_dump_graphviz_code(const struct DFA_state *start_state, FILE *fp)
+{
+    struct generic_list visited_state;
+    create_generic_list(struct DFA_state *, &visited_state);
+
+    fprintf(fp,
+        "digraph finite_state_machine {\n"
+        "    rankdir=LR;\n"
+        "    size=\"8,5\"\n"
+        "    node [shape = circle label=\"\"]\n");
+
+    generic_list_push_back(&visited_state, &start_state);
+    __DFA_reachable_states_dump_graphviz(start_state, &visited_state, fp);
+
+    /* dump start mark */
+    fprintf(fp, "    node [shape = none label=\"\"]; start\n");
+    fprintf(fp, "    start -> addr_%p [ label = \"start\" ]\n", (void*)start_state);
+
+    /* done */
+    fprintf(fp, "}\n");
+    destroy_generic_list(&visited_state);
+}
+
+/* int main(int argc, char *argv[]) */
+/* { */
+    /* struct NFA nfa; */
+    /* struct DFA_state *dfa, *dfa_opt; */
+
+    /* FILE *fp_nfa, *fp_dfa, *fp_dfa_opt; */
+
+    /* if (argc == 2) */
+    /* { */
+        /* if ( (fp_nfa = fopen("nfa.dot", "w")) == NULL) { */
+            /* perror("fopen nfa.dot error"); exit(-1); */
+        /* } */
+        /* if ( (fp_dfa = fopen("dfa.dot", "w")) == NULL) { */
+            /* perror("fopen dfa.dot error"); exit(-1); */
+        /* } */
+        /* if ( (fp_dfa_opt = fopen("dfa_opt.dot", "w")) == NULL) { */
+            /* perror("fopen dfa_opt.dot error"); exit(-1); */
+        /* } */
+
+        /* fprintf(stderr, "regexp: %s\n", argv[1]); */
+
+        /* [> parse regexp and generate NFA and DFA <] */
+        /* nfa = reg_to_NFA(argv[1]); */
+        /* dfa = NFA_to_DFA(&nfa); */
+        /* dfa_opt = DFA_optimize(dfa); */
+
+        /* [> dump NFA and DFA as graphviz code <] */
+        /* NFA_dump_graphviz_code(&nfa, fp_nfa); */
+        /* DFA_dump_graphviz_code(dfa, fp_dfa); */
+        /* DFA_dump_graphviz_code(dfa_opt, fp_dfa_opt); */
+
+        /* [> finalize <] */
+        /* NFA_dispose(&nfa);    fclose(fp_nfa); */
+        /* DFA_dispose(dfa);     fclose(fp_dfa); */
+        /* DFA_dispose(dfa_opt); fclose(fp_dfa_opt); */
+    /* } */
+    /* else { */
+        /* printf("usage: %s 'regexp'\n", argv[0]); */
+    /* } */
+
+    /* return 0; */
+/* } */
+
+struct DFA_state *re2dfa(char *re_string) {
+    struct NFA nfa;
+    struct DFA_state *dfa, *dfa_opt;
+
+    nfa = reg_to_NFA(re_string);
+    dfa = NFA_to_DFA(&nfa);
+    dfa_opt = DFA_optimize(dfa);
+
+    return dfa_opt;
+}

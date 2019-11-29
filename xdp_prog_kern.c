@@ -21,7 +21,7 @@
 #define IDS_INSPECT_DEPTH 100
 
 /* IDS Inspect Uit */
-typedef __u16 ids_inspect_unit;
+typedef __u8 ids_inspect_unit;
 // struct ids_inspect_unit {
 	// __u8 unit[IDS_INSPECT_STRIDE];
 // };
@@ -33,6 +33,7 @@ typedef __u16 ids_inspect_state;
 struct ids_inspect_map_key {
 	ids_inspect_state state;
 	ids_inspect_unit unit;
+	__u8 padding;
 };
 
 struct ids_inspect_map_value {
@@ -180,6 +181,7 @@ static __always_inline __u16 inspect_payload(struct hdr_cursor *nh,
 	int i;
 
 	ids_map_key.state = 0;
+	ids_map_key.padding = 0;
 
 	#pragma unroll
 	for (i = 0; i < IDS_INSPECT_DEPTH; i++) {

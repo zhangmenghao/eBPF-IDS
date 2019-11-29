@@ -30,6 +30,24 @@ static const char *__doc__ = "XDP redirect helper\n"
 /* re2dfa library */
 #include "common/re2dfa.h"
 
+/* IDS Inspect Uit */
+typedef __u8 ids_inspect_unit;
+
+/* IDS Inspect State */
+typedef __u16 ids_inspect_state;
+
+/* Key-Value of ids_inspect_map */
+struct ids_inspect_map_key {
+	ids_inspect_state state;
+	ids_inspect_unit unit;
+	__u8 padding;
+};
+
+struct ids_inspect_map_value {
+	__u8 final_state;
+	ids_inspect_state state;
+};
+
 static const char *ids_inspect_map_name = "ids_inspect_map";
 
 static const struct option_wrapper long_options[] = {
@@ -89,6 +107,53 @@ static int parse_mac(char *str, unsigned char mac[ETH_ALEN])
 	return 0;
 }
 
+static int dfa2map(struct DFA_state *dfa, int map_fd)
+{
+	struct generic_list state_list;
+	struct DFA_state **state, *next_state;
+	struct ids_inspect_map_key map_key;
+	struct ids_inspect_map_value map_value;
+	int i_state, n_state;
+
+	/* Save all state in DFA into a generic list */
+	create_generic_list(struct DFA_state *, &state_list);
+	generic_list_push_back(&state_list, &dfa);
+	DFA_traverse(dfa, &state_list);
+
+	/* Encode each state */
+	n_state = state_list.length;
+	state = (struct DFA_state **) state_list.p_dat;
+	for (i_state = 0; i_state < n_state; i_state++, state++) {
+		(*state)->state_id = i_state;
+	}
+
+	printf("BP1\n");
+	/* Convert dfa to map */
+	state = (struct DFA_state **) state_list.p_dat;
+	for (i_state = 0; i_state < n_state; i_state++, state++) {
+		int i_trans, n_trans = (*state)->n_transitions;
+		printf("BP2\n");
+		for (i_trans = 0; i_trans < n_trans; i_trans++) {
+			next_state = (*state)->trans[i_trans].to;
+			map_key.padding = 0;
+			map_key.state = (*state)->state_id;
+			map_key.unit = (*state)->trans[i_trans].trans_char;
+			map_value.state = next_state->state_id;
+			map_value.final_state = next_state->is_acceptable;
+			printf("map_key size: %ld, map_value size: %ld\n", sizeof(map_key), sizeof(map_value));
+			printf("map_key - padding: %d, state: %d, unit: %c\n", map_key.padding, map_key.state, map_key.unit);
+			printf("map_value - state: %d, final_state: %d\n", map_value.state, map_value.final_state);
+			if (bpf_map_update_elem(map_fd, &map_key, &map_value, 0) < 0) {
+				fprintf(stderr,
+					"WARN: Failed to update bpf map file: err(%d):%s\n",
+					errno, strerror(errno));
+			}
+		}
+	}
+
+	return 0;
+}
+
 #ifndef PATH_MAX
 #define PATH_MAX 4096
 #endif
@@ -97,8 +162,8 @@ const char *pin_basedir = "/sys/fs/bpf";
 
 int main(int argc, char **argv)
 {
-	int i, j;
-	int len, result;
+	int i;
+	int len;
 	int map_fd;
 	bool router, ids;
 	char pin_dir[PATH_MAX];
@@ -145,17 +210,16 @@ int main(int argc, char **argv)
 		if (map_fd < 0) {
 			return EXIT_FAIL_BPF;
 		} else {
-			struct dfaObject targetDFA;
-			char *re_string = "(dog)|(cat)|(fish)|(panda)";
-			result = re2dfa(re_string, &targetDFA);
-			if (result < 0) {
+			char *re_string = "(dog)|(cat)";
+			struct DFA_state *dfa;
+			dfa = re2dfa(re_string);
+			if (!dfa) {
 				fprintf(stderr, "ERR: can't convert the RE to DFA\n");
 				return EXIT_FAIL_RE2DFA;
 			} else {
-				printObjectMappedDFA(&targetDFA);
-				for (i = 1; i <= targetDFA.newStates; i++) {
-					for (j = 0; j <= targetDFA.noOfInputs; j++) {
-					}
+				if (dfa2map(dfa, map_fd) < 0) {
+					fprintf(stderr, "ERR: can't convert the DFA to Map\n");
+					return EXIT_FAIL_RE2DFA;
 				}
 			}
 		}
@@ -165,8 +229,12 @@ int main(int argc, char **argv)
 		if (map_fd < 0) {
 			return EXIT_FAIL_BPF;
 		}
-		for (i = 1; i < 256; ++i)
-			bpf_map_update_elem(map_fd, &i, &i, 0);
+		for (i = 1; i < 10; ++i)
+			if (bpf_map_update_elem(map_fd, &i, &i, 0) < 0) {
+				fprintf(stderr,
+					"WARN: Failed to update bpf map file: err(%d):%s\n",
+					errno, strerror(errno));
+			}
 	}
 
 	return EXIT_OK;
