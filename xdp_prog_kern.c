@@ -16,6 +16,30 @@
 #define memcpy(dest, src, n) __builtin_memcpy((dest), (src), (n))
 #endif
 
+#define IDS_INSPECT_STRIDE 1
+#define IDS_INSPECT_MAP_SIZE 256
+#define IDS_INSPECT_DEPTH 100
+
+/* IDS Inspect Uit */
+typedef __u16 ids_inspect_unit;
+// struct ids_inspect_unit {
+	// __u8 unit[IDS_INSPECT_STRIDE];
+// };
+
+/* IDS Inspect State */
+typedef __u16 ids_inspect_state;
+
+/* Key-Value of ids_inspect_map */
+struct ids_inspect_map_key {
+	ids_inspect_state state;
+	ids_inspect_unit unit;
+};
+
+struct ids_inspect_map_value {
+	__u8 final_state;
+	ids_inspect_state state;
+};
+
 struct bpf_map_def SEC("maps") tx_port = {
 	.type = BPF_MAP_TYPE_DEVMAP,
 	.key_size = sizeof(int),
@@ -23,190 +47,12 @@ struct bpf_map_def SEC("maps") tx_port = {
 	.max_entries = 256,
 };
 
-struct bpf_map_def SEC("maps") redirect_params = {
-	.type = BPF_MAP_TYPE_HASH,
-	.key_size = ETH_ALEN,
-	.value_size = ETH_ALEN,
-	.max_entries = 1,
+struct bpf_map_def SEC("maps") ids_inspect_map = {
+	.type = BPF_MAP_TYPE_PERCPU_ARRAY,
+	.key_size = sizeof(struct ids_inspect_map_key),
+	.value_size = sizeof(struct ids_inspect_map_value),
+	.max_entries = IDS_INSPECT_MAP_SIZE,
 };
-
-static __always_inline __u16 csum_fold_helper(__u32 csum)
-{
-	return ~((csum & 0xffff) + (csum >> 16));
-}
-
-/*
- * The icmp_checksum_diff function takes pointers to old and new structures and
- * the old checksum and returns the new checksum.  It uses the bpf_csum_diff
- * helper to compute the checksum difference. Note that the sizes passed to the
- * bpf_csum_diff helper should be multiples of 4, as it operates on 32-bit
- * words.
- */
-static __always_inline __u16 icmp_checksum_diff(
-		__u16 seed,
-		struct icmphdr_common *icmphdr_new,
-		struct icmphdr_common *icmphdr_old)
-{
-	__u32 csum, size = sizeof(struct icmphdr_common);
-
-	csum = bpf_csum_diff(icmphdr_old, size, icmphdr_new, size, seed);
-	return csum_fold_helper(csum);
-}
-
-/* Solution to packet03/assignment-1 */
-SEC("xdp_icmp_echo")
-int xdp_icmp_echo_func(struct xdp_md *ctx)
-{
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
-	struct hdr_cursor nh;
-	struct ethhdr *eth;
-	int eth_type;
-	int ip_type;
-	int icmp_type;
-	struct iphdr *iphdr;
-	struct ipv6hdr *ipv6hdr;
-	__u16 echo_reply, old_csum;
-	struct icmphdr_common *icmphdr;
-	struct icmphdr_common icmphdr_old;
-	__u32 action = XDP_PASS;
-
-	/* These keep track of the next header type and iterator pointer */
-	nh.pos = data;
-
-	/* Parse Ethernet and IP/IPv6 headers */
-	eth_type = parse_ethhdr(&nh, data_end, &eth);
-	if (eth_type == bpf_htons(ETH_P_IP)) {
-		ip_type = parse_iphdr(&nh, data_end, &iphdr);
-		if (ip_type != IPPROTO_ICMP)
-			goto out;
-	} else if (eth_type == bpf_htons(ETH_P_IPV6)) {
-		ip_type = parse_ip6hdr(&nh, data_end, &ipv6hdr);
-		if (ip_type != IPPROTO_ICMPV6)
-			goto out;
-	} else {
-		goto out;
-	}
-
-	/*
-	 * We are using a special parser here which returns a stucture
-	 * containing the "protocol-independent" part of an ICMP or ICMPv6
-	 * header.  For purposes of this Assignment we are not interested in
-	 * the rest of the structure.
-	 */
-	icmp_type = parse_icmphdr_common(&nh, data_end, &icmphdr);
-	if (eth_type == bpf_htons(ETH_P_IP) && icmp_type == ICMP_ECHO) {
-		/* Swap IP source and destination */
-		swap_src_dst_ipv4(iphdr);
-		echo_reply = ICMP_ECHOREPLY;
-	} else if (eth_type == bpf_htons(ETH_P_IPV6)
-		   && icmp_type == ICMPV6_ECHO_REQUEST) {
-		/* Swap IPv6 source and destination */
-		swap_src_dst_ipv6(ipv6hdr);
-		echo_reply = ICMPV6_ECHO_REPLY;
-	} else {
-		goto out;
-	}
-
-	/* Swap Ethernet source and destination */
-	swap_src_dst_mac(eth);
-
-
-	/* Patch the packet and update the checksum.*/
-	old_csum = icmphdr->cksum;
-	icmphdr->cksum = 0;
-	icmphdr_old = *icmphdr;
-	icmphdr->type = echo_reply;
-	icmphdr->cksum = icmp_checksum_diff(~old_csum, icmphdr, &icmphdr_old);
-
-	/* Another, less generic, but a bit more efficient way to update the
-	 * checksum is listed below.  As only one 16-bit word changed, the sum
-	 * can be patched using this formula: sum' = ~(~sum + ~m0 + m1), where
-	 * sum' is a new sum, sum is an old sum, m0 and m1 are the old and new
-	 * 16-bit words, correspondingly. In the formula above the + operation
-	 * is defined as the following function:
-	 *
-	 *     static __always_inline __u16 csum16_add(__u16 csum, __u16 addend)
-	 *     {
-	 *         csum += addend;
-	 *         return csum + (csum < addend);
-	 *     }
-	 *
-	 * So an alternative code to update the checksum might look like this:
-	 *
-	 *     __u16 m0 = * (__u16 *) icmphdr;
-	 *     icmphdr->type = echo_reply;
-	 *     __u16 m1 = * (__u16 *) icmphdr;
-	 *     icmphdr->checksum = ~(csum16_add(csum16_add(~icmphdr->checksum, ~m0), m1));
-	 */
-
-	action = XDP_TX;
-
-out:
-	return xdp_stats_record_action(ctx, action);
-}
-
-/* Solution to packet03/assignment-2 */
-SEC("xdp_redirect")
-int xdp_redirect_func(struct xdp_md *ctx)
-{
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
-	struct hdr_cursor nh;
-	struct ethhdr *eth;
-	int eth_type;
-	int action = XDP_PASS;
-	unsigned char dst[ETH_ALEN] = { /* TODO: put your values here */ };
-	unsigned ifindex = 0/* TODO: put your values here */;
-
-	/* These keep track of the next header type and iterator pointer */
-	nh.pos = data;
-
-	/* Parse Ethernet and IP/IPv6 headers */
-	eth_type = parse_ethhdr(&nh, data_end, &eth);
-	if (eth_type == -1)
-		goto out;
-
-	/* Set a proper destination address */
-	memcpy(eth->h_dest, dst, ETH_ALEN);
-	action = bpf_redirect(ifindex, 0);
-
-out:
-	return xdp_stats_record_action(ctx, action);
-}
-
-/* Solution to packet03/assignment-3 */
-SEC("xdp_redirect_map")
-int xdp_redirect_map_func(struct xdp_md *ctx)
-{
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
-	struct hdr_cursor nh;
-	struct ethhdr *eth;
-	int eth_type;
-	int action = XDP_PASS;
-	unsigned char *dst;
-
-	/* These keep track of the next header type and iterator pointer */
-	nh.pos = data;
-
-	/* Parse Ethernet and IP/IPv6 headers */
-	eth_type = parse_ethhdr(&nh, data_end, &eth);
-	if (eth_type == -1)
-		goto out;
-
-	/* Do we know where to redirect this packet? */
-	dst = bpf_map_lookup_elem(&redirect_params, eth->h_source);
-	if (!dst)
-		goto out;
-
-	/* Set a proper destination address */
-	memcpy(eth->h_dest, dst, ETH_ALEN);
-	action = bpf_redirect_map(&tx_port, 0, 0);
-
-out:
-	return xdp_stats_record_action(ctx, action);
-}
 
 #define AF_INET 2
 #define AF_INET6 10
@@ -221,7 +67,6 @@ static __always_inline int ip_decrease_ttl(struct iphdr *iph)
 	return --iph->ttl;
 }
 
-/* Solution to packet03/assignment-4 */
 SEC("xdp_router")
 int xdp_router_func(struct xdp_md *ctx)
 {
@@ -323,6 +168,102 @@ SEC("xdp_pass")
 int xdp_pass_func(struct xdp_md *ctx)
 {
 	return XDP_PASS;
+}
+
+static __always_inline __u16 inspect_payload(struct hdr_cursor *nh, void *data_end)
+{
+	// struct ids_inspect_unit *ids_unit = nh->pos;
+	ids_inspect_unit *ids_unit = nh->pos;
+	struct ids_inspect_map_key ids_map_key;
+	struct ids_inspect_map_value *ids_map_value;
+	int i;
+
+	ids_map_key.state = 0;
+
+	#pragma unroll
+	for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
+		if (ids_unit + 1 > data_end) {
+			break;
+		}
+		// memcpy(ids_map_key.unit.unit, ids_unit, IDS_INSPECT_STRIDE);
+		// memcpy(&(ids_map_key.unit), ids_unit, IDS_INSPECT_STRIDE);
+		ids_map_key.unit = *ids_unit;
+		ids_map_value = bpf_map_lookup_elem(&ids_inspect_map, &ids_map_key);
+		if (!ids_map_value) {
+			/* Default rule: return to the initial state */
+			ids_map_key.state = 0;
+		} else if (ids_map_value->final_state) {
+			/* A pattern is matched */
+			return ids_map_value->state;
+		} else {
+			/* Go to the next state according to DFA */
+			ids_map_key.state = ids_map_value->state;
+		}
+		/* Prepare for next scanning */
+		ids_unit += 1;
+	}
+
+	return 0;
+}
+
+SEC("xdp_ids")
+int xdp_ids_func(struct xdp_md *ctx)
+{
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
+	struct hdr_cursor nh = { .pos = data };
+	int eth_type, ip_type;
+	struct ethhdr *eth;
+	struct iphdr *iph;
+	struct ipv6hdr *ip6h;
+	struct udphdr *udph;
+	struct tcphdr *tcph;
+	ids_inspect_state ids_state;
+
+	/* Default action XDP_PASS, imply everything we couldn't parse, or that
+	 * we don't want to deal with, we just pass up the stack and let the
+	 * kernel deal with it.
+	 */
+	__u32 action = XDP_PASS; /* Default action */
+
+	eth_type = parse_ethhdr(&nh, data_end, &eth);
+
+	if (eth_type == bpf_htons(ETH_P_IP)) {
+		ip_type = parse_iphdr(&nh, data_end, &iph);
+	} else if (eth_type == bpf_htons(ETH_P_IPV6)) {
+		ip_type = parse_ip6hdr(&nh, data_end, &ip6h);
+	} else {
+		goto out;
+	}
+
+	if (ip_type == IPPROTO_TCP) {
+		if (parse_tcphdr(&nh, data_end, &tcph) < 0) {
+			action = XDP_ABORTED;
+			goto out;
+		} else {
+			ids_state = inspect_payload(&nh, data_end);
+			if (ids_state > 0) {
+				action = XDP_DROP;
+				goto out;
+			}
+		}
+	} else if (ip_type == IPPROTO_UDP) {
+		if (parse_udphdr(&nh, data_end, &udph) < 0) {
+			action = XDP_ABORTED;
+			goto out;
+		} else {
+			ids_state = inspect_payload(&nh, data_end);
+			if (ids_state > 0) {
+				action = XDP_DROP;
+				goto out;
+			}
+		}
+	} else {
+		goto out;
+	}
+
+out:
+	return xdp_stats_record_action(ctx, action);
 }
 
 char _license[] SEC("license") = "GPL";
