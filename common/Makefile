@@ -1,7 +1,7 @@
 # SPDX-License-Identifier: (GPL-2.0)
 CC := gcc
 
-all: common_params.o common_user_bpf_xdp.o common_libbpf.o
+all: common_params.o common_user_bpf_xdp.o common_libbpf.o re2dfa.o
 
 CFLAGS := -g -Wall
 
@@ -17,6 +17,9 @@ common_user_bpf_xdp.o: common_user_bpf_xdp.c common_user_bpf_xdp.h
 
 common_libbpf.o: common_libbpf.c common_libbpf.h
 	$(CC) $(CFLAGS) -c -o $@ $<
+
+re2dfa.o: re2dfa.c re2dfa.h
+	$(CC) -c -o $@ $<
 
 .PHONY: clean
 

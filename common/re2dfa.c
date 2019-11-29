@@ -1456,7 +1456,7 @@ void calculateTransitionTable(struct dfaMatrix dfa[REMAX][REMAX], struct syntaxN
 	// for( i = 0; i < final_state_count; i++ ) printf("%c ", final_states[i]);
 	// printf("\n------------------------------------\n");
 
-	saveDFA(dfa, (*ns), no_of_inputs, final_state_count, input, final_states);
+    // saveDFA(dfa, (*ns), no_of_inputs, final_state_count, input, final_states);
 }
 //transition table calculation end=====================================================================================================
 

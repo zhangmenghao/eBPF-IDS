@@ -170,7 +170,8 @@ int xdp_pass_func(struct xdp_md *ctx)
 	return XDP_PASS;
 }
 
-static __always_inline __u16 inspect_payload(struct hdr_cursor *nh, void *data_end)
+static __always_inline __u16 inspect_payload(struct hdr_cursor *nh,
+											 void *data_end)
 {
 	// struct ids_inspect_unit *ids_unit = nh->pos;
 	ids_inspect_unit *ids_unit = nh->pos;

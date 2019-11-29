@@ -30,6 +30,8 @@ static const char *__doc__ = "XDP redirect helper\n"
 /* re2dfa library */
 #include "common/re2dfa.h"
 
+static const char *ids_inspect_map_name = "ids_inspect_map";
+
 static const struct option_wrapper long_options[] = {
 
 	{{"help",        no_argument,		NULL, 'h' },
@@ -91,28 +93,28 @@ static int parse_mac(char *str, unsigned char mac[ETH_ALEN])
 #define PATH_MAX 4096
 #endif
 
-const char *pin_basedir =  "/sys/fs/bpf";
+const char *pin_basedir = "/sys/fs/bpf";
 
 int main(int argc, char **argv)
 {
-	int i;
-	int len;
+	int i, j;
+	int len, result;
 	int map_fd;
-	bool router;
+	bool router, ids;
 	char pin_dir[PATH_MAX];
 	unsigned char src[ETH_ALEN];
 	unsigned char dest[ETH_ALEN];
 
+	router = false;
+	ids = true;
+
 	struct config cfg = {
-		.ifindex   = -1,
-		.redirect_ifindex   = -1,
+		.ifindex = -1,
+		.redirect_ifindex = -1,
 	};
 
 	/* Cmdline options can change progsec */
 	parse_cmdline_args(argc, argv, long_options, &cfg, __doc__);
-
-	router = false;
-
 	if (cfg.redirect_ifindex > 0 && cfg.ifindex == -1) {
 		fprintf(stderr, "ERR: required option --dev missing\n\n");
 		usage(argv[0], __doc__, long_options, (argc == 1));
@@ -137,7 +139,27 @@ int main(int argc, char **argv)
 
 	printf("map dir: %s\n", pin_dir);
 
-	if (router) {
+	if (ids) {
+		/* Open the ids_inspect_map corresponding to the cfg.ifname interface */
+		map_fd = open_bpf_map_file(pin_dir, ids_inspect_map_name, NULL);
+		if (map_fd < 0) {
+			return EXIT_FAIL_BPF;
+		} else {
+			struct dfaObject targetDFA;
+			char *re_string = "(dog)|(cat)|(fish)|(panda)";
+			result = re2dfa(re_string, &targetDFA);
+			if (result < 0) {
+				fprintf(stderr, "ERR: can't convert the RE to DFA\n");
+				return EXIT_FAIL_RE2DFA;
+			} else {
+				printObjectMappedDFA(&targetDFA);
+				for (i = 1; i <= targetDFA.newStates; i++) {
+					for (j = 0; j <= targetDFA.noOfInputs; j++) {
+					}
+				}
+			}
+		}
+	} else if (router) {
 		/* Open the tx_port map corresponding to the cfg.ifname interface */
 		map_fd = open_bpf_map_file(pin_dir, "tx_port", NULL);
 		if (map_fd < 0) {
