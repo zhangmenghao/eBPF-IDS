@@ -12,6 +12,8 @@
 #include "common/xdp_stats_kern_user.h"
 #include "common/xdp_stats_kern.h"
 
+#include "common_kern_user.h"
+
 #ifndef memcpy
 #define memcpy(dest, src, n) __builtin_memcpy((dest), (src), (n))
 #endif
@@ -26,28 +28,6 @@
 #define IDS_INSPECT_STRIDE 1
 #define IDS_INSPECT_MAP_SIZE 256
 #define IDS_INSPECT_DEPTH 100
-
-/* IDS Inspect Uit */
-typedef __u8 ids_inspect_unit;
-// struct ids_inspect_unit {
-	// __u8 unit[IDS_INSPECT_STRIDE];
-// };
-
-/* IDS Inspect State */
-typedef __u16 ids_inspect_state;
-
-/* Key-Value of ids_inspect_map */
-struct ids_inspect_map_key {
-	ids_inspect_state state;
-	ids_inspect_unit unit;
-	__u8 padding;
-};
-
-struct ids_inspect_map_value {
-	__u8 padding;
-	__u8 is_acceptable;
-	ids_inspect_state state;
-};
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {
 	.type = BPF_MAP_TYPE_HASH,

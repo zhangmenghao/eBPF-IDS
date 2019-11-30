@@ -30,24 +30,7 @@ static const char *__doc__ = "XDP redirect helper\n"
 /* re2dfa library */
 #include "common/re2dfa.h"
 
-/* IDS Inspect Uit */
-typedef __u8 ids_inspect_unit;
-
-/* IDS Inspect State */
-typedef __u16 ids_inspect_state;
-
-/* Key-Value of ids_inspect_map */
-struct ids_inspect_map_key {
-	ids_inspect_state state;
-	ids_inspect_unit unit;
-	__u8 padding;
-};
-
-struct ids_inspect_map_value {
-	__u8 padding;
-	__u8 is_acceptable;
-	ids_inspect_state state;
-};
+#include "common_kern_user.h"
 
 static const char *ids_inspect_map_name = "ids_inspect_map";
 
