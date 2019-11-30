@@ -14,117 +14,123 @@
 
 #include "common_kern_user.h"
 
-#define MAX_ENTRIES 256
-#define MAX_PAYLOAD_DEPTH 100
-#define ACCEPTED_STATE 3
-
 #ifndef memcpy
 #define memcpy(dest, src, n) __builtin_memcpy((dest), (src), (n))
 #endif
 
-struct payload {
-	__u8 payload;
-};
+#define bpf_printk(fmt, ...)                                    \
+({                                                              \
+	char ____fmt[] = fmt;                                   \
+	bpf_trace_printk(____fmt, sizeof(____fmt),              \
+                         ##__VA_ARGS__);                        \
+})
 
-struct bpf_map_def SEC("maps") IDS_state_map = {
+#define IDS_INSPECT_STRIDE 1
+#define IDS_INSPECT_MAP_SIZE 256
+#define IDS_INSPECT_DEPTH 100
+
+struct bpf_map_def SEC("maps") ids_inspect_map = {
 	.type = BPF_MAP_TYPE_HASH,
-	.key_size = sizeof(struct match),
-	.value_size = sizeof(struct action),
-	.max_entries = MAX_ENTRIES,
+	.key_size = sizeof(struct ids_inspect_map_key),
+	.value_size = sizeof(struct ids_inspect_map_value),
+	.max_entries = IDS_INSPECT_MAP_SIZE,
 };
 
-static __always_inline int parse_payload(struct hdr_cursor *nh,
-					void *data_end){
-	struct payload *pl = nh->pos;
+static __always_inline __u16 inspect_payload(struct hdr_cursor *nh,
+											 void *data_end)
+{
+	// struct ids_inspect_unit *ids_unit = nh->pos;
+	ids_inspect_unit *ids_unit = nh->pos;
+	struct ids_inspect_map_key ids_map_key;
+	struct ids_inspect_map_value *ids_map_value;
 	int i;
-	struct match mat;
-	mat.state = 0;
-	mat.padding = 0;
+
+	ids_map_key.state = 0;
+	ids_map_key.padding = 0;
 
 	#pragma unroll
-	for (i = 0; i < MAX_PAYLOAD_DEPTH; i ++){
-		if (pl + 1 > data_end){
+	for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
+		if (ids_unit + 1 > data_end) {
 			break;
 		}
-		
-		mat.chars = pl->payload;
-		struct action *act = bpf_map_lookup_elem(&IDS_state_map, &mat);
-		if (!act){
-			mat.state = 0;
+		// memcpy(ids_map_key.unit.unit, ids_unit, IDS_INSPECT_STRIDE);
+		// memcpy(&(ids_map_key.unit), ids_unit, IDS_INSPECT_STRIDE);
+		ids_map_key.unit = *ids_unit;
+		ids_map_value = bpf_map_lookup_elem(&ids_inspect_map, &ids_map_key);
+		if (!ids_map_value) {
+			/* Default rule: return to the initial state */
+			ids_map_key.state = 0;
+		} else if (ids_map_value->is_acceptable) {
+			/* A pattern is matched */
+			return ids_map_value->state;
+		} else {
+			/* Go to the next state according to DFA */
+			ids_map_key.state = ids_map_value->state;
 		}
-		else if (act->state == ACCEPTED_STATE){
-			return XDP_DROP;
-		}
-		else{
-			mat.state = act->state;
-		}
-		pl ++;
-
+		/* Prepare for next scanning */
+		ids_unit += 1;
 	}
-	return XDP_PASS;
+
+	return 0;
 }
 
-SEC("xdp_IDS")
-int xdp_IDS_func(struct xdp_md *ctx){
+SEC("xdp_ids")
+int xdp_ids_func(struct xdp_md *ctx)
+{
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
-	struct hdr_cursor nh;
-	int nh_type;
-	nh.pos = data;
-	__u32 action = XDP_PASS; /* Default action */
-	
-	//layer 2
+	struct hdr_cursor nh = { .pos = data };
+	int eth_type, ip_type;
 	struct ethhdr *eth;
-	nh_type = parse_ethhdr(&nh, data_end, &eth);
+	struct iphdr *iph;
+	struct ipv6hdr *ip6h;
+	struct udphdr *udph;
+	struct tcphdr *tcph;
+	ids_inspect_state ids_state;
 
-	//layer 3
-	if (nh_type == bpf_htons(ETH_P_IPV6)) {
-		struct ipv6hdr *ip6h;
-		nh_type = parse_ip6hdr(&nh, data_end, &ip6h);
-	} 
-	else if (nh_type == bpf_htons(ETH_P_IP)) {
-		struct iphdr *iph;		
-		nh_type = parse_iphdr(&nh, data_end, &iph);
-	}
-	else{
-		action = XDP_ABORTED;
+	/* Default action XDP_PASS, imply everything we couldn't parse, or that
+	 * we don't want to deal with, we just pass up the stack and let the
+	 * kernel deal with it.
+	 */
+	__u32 action = XDP_PASS; /* Default action */
+
+	eth_type = parse_ethhdr(&nh, data_end, &eth);
+
+	if (eth_type == bpf_htons(ETH_P_IP)) {
+		ip_type = parse_iphdr(&nh, data_end, &iph);
+	} else if (eth_type == bpf_htons(ETH_P_IPV6)) {
+		ip_type = parse_ip6hdr(&nh, data_end, &ip6h);
+	} else {
+		goto out;
 	}
 
-	//layer 4
-	if (nh_type == IPPROTO_TCP){
-		struct tcphdr *tcphdr; 
-		if (parse_tcphdr(&nh, data_end, & tcphdr) < 0){
+	if (ip_type == IPPROTO_TCP) {
+		if (parse_tcphdr(&nh, data_end, &tcph) < 0) {
 			action = XDP_ABORTED;
+			goto out;
+		} else {
+			ids_state = inspect_payload(&nh, data_end);
+			if (ids_state > 0) {
+				action = XDP_DROP;
+				goto out;
+			}
 		}
-		action = parse_payload(&nh, data_end);
-	}
-	else if (nh_type == IPPROTO_UDP){
-		struct udphdr *udphdr; 
-		if (parse_udphdr(&nh, data_end, & udphdr) < 0){
+	} else if (ip_type == IPPROTO_UDP) {
+		if (parse_udphdr(&nh, data_end, &udph) < 0) {
 			action = XDP_ABORTED;
+			goto out;
+		} else {
+			ids_state = inspect_payload(&nh, data_end);
+			if (ids_state > 0) {
+				action = XDP_DROP;
+				goto out;
+			}
 		}
-		action = parse_payload(&nh, data_end);
+	} else {
+		goto out;
 	}
-	else if (nh_type == IPPROTO_ICMPV6){
-		struct icmp6hdr *icmp6h;
-		nh_type = parse_icmp6hdr(&nh, data_end, &icmp6h);
-		if (nh_type != ICMPV6_ECHO_REQUEST){
-			action = XDP_ABORTED;
-		}
-		action = parse_payload(&nh, data_end);
-	}
-	else if (nh_type == IPPROTO_ICMP){
-		struct icmphdr *icmph;
-		nh_type = parse_icmphdr(&nh, data_end, &icmph);
-		if (nh_type != ICMP_ECHO){
-			action = XDP_ABORTED;
-		}
-		action = parse_payload(&nh, data_end);
-	}
-	else{
-		action = XDP_ABORTED;
-	}
-	
+
+out:
 	return xdp_stats_record_action(ctx, action);
 }
 
