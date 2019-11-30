@@ -37,7 +37,7 @@ struct ids_inspect_map_key {
 };
 
 struct ids_inspect_map_value {
-	__u8 final_state;
+	__u16 final_state;
 	ids_inspect_state state;
 };
 
@@ -49,7 +49,7 @@ struct bpf_map_def SEC("maps") tx_port = {
 };
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {
-	.type = BPF_MAP_TYPE_PERCPU_ARRAY,
+	.type = BPF_MAP_TYPE_HASH,
 	.key_size = sizeof(struct ids_inspect_map_key),
 	.value_size = sizeof(struct ids_inspect_map_value),
 	.max_entries = IDS_INSPECT_MAP_SIZE,

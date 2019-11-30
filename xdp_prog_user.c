@@ -44,7 +44,7 @@ struct ids_inspect_map_key {
 };
 
 struct ids_inspect_map_value {
-	__u8 final_state;
+	__u16 final_state;
 	ids_inspect_state state;
 };
 
@@ -127,12 +127,10 @@ static int dfa2map(struct DFA_state *dfa, int map_fd)
 		(*state)->state_id = i_state;
 	}
 
-	printf("BP1\n");
 	/* Convert dfa to map */
 	state = (struct DFA_state **) state_list.p_dat;
 	for (i_state = 0; i_state < n_state; i_state++, state++) {
 		int i_trans, n_trans = (*state)->n_transitions;
-		printf("BP2\n");
 		for (i_trans = 0; i_trans < n_trans; i_trans++) {
 			next_state = (*state)->trans[i_trans].to;
 			map_key.padding = 0;
@@ -229,7 +227,7 @@ int main(int argc, char **argv)
 		if (map_fd < 0) {
 			return EXIT_FAIL_BPF;
 		}
-		for (i = 1; i < 10; ++i)
+		for (i = 1; i < 5; ++i)
 			if (bpf_map_update_elem(map_fd, &i, &i, 0) < 0) {
 				fprintf(stderr,
 					"WARN: Failed to update bpf map file: err(%d):%s\n",
