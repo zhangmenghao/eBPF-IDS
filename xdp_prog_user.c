@@ -122,19 +122,19 @@ int main(int argc, char **argv)
 		printf("Err: This should not happens!");
 	} else {
 		if (write_match_action_entries(map_fd, 0, 'd', 1)){
-			fprintf(stderr, "can't write iface params\n");
+			fprintf(stderr, "can't write map params\n");
 		}
 		if (write_match_action_entries(map_fd, 1, 'o', 2)){
-			fprintf(stderr, "can't write iface params\n");
+			fprintf(stderr, "can't write map_fd params\n");
 		}
 		if (write_match_action_entries(map_fd, 2, 'g', 3)){
-			fprintf(stderr, "can't write iface params\n");
+			fprintf(stderr, "can't write map params\n");
 		}
 		if (write_match_action_entries(map_fd, 1, 'd', 1)){
-			fprintf(stderr, "can't write iface params\n");
+			fprintf(stderr, "can't write map params\n");
 		}
 		if (write_match_action_entries(map_fd, 2, 'd', 1)){
-			fprintf(stderr, "can't write iface params\n");
+			fprintf(stderr, "can't write map params\n");
 		}
 
 	}
