@@ -297,7 +297,7 @@ teardown()
     ip link del dev "$NS"
     ip netns del "$NS"
     rm -f "$STATEFILE"
-    [ -d "/sys/fs/bpf/$NS" ] && rmdir "/sys/fs/bpf/$NS" || true
+    [ -d "/sys/fs/bpf/$NS" ] && rm -rf "/sys/fs/bpf/$NS" || true
 
     if [ -f "$STATEDIR/current" ]; then
         local CUR=$(< "$STATEDIR/current" )

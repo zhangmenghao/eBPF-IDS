@@ -44,7 +44,8 @@ struct ids_inspect_map_key {
 };
 
 struct ids_inspect_map_value {
-	__u16 final_state;
+	__u8 padding;
+	__u8 is_acceptable;
 	ids_inspect_state state;
 };
 
@@ -72,40 +73,6 @@ static const struct option_wrapper long_options[] = {
 
 	{{0, 0, NULL,  0 }, NULL, false}
 };
-
-static int parse_u8(char *str, unsigned char *x)
-{
-	unsigned long z;
-
-	z = strtoul(str, 0, 16);
-	if (z > 0xff)
-		return -1;
-
-	if (x)
-		*x = z;
-
-	return 0;
-}
-
-static int parse_mac(char *str, unsigned char mac[ETH_ALEN])
-{
-	/* Parse a MAC address in this function and place the
-	 * result in the mac array */
-	if (parse_u8(str, &mac[0]) < 0)
-		return -1;
-	if (parse_u8(str + 3, &mac[1]) < 0)
-		return -1;
-	if (parse_u8(str + 6, &mac[2]) < 0)
-		return -1;
-	if (parse_u8(str + 9, &mac[3]) < 0)
-		return -1;
-	if (parse_u8(str + 12, &mac[4]) < 0)
-		return -1;
-	if (parse_u8(str + 15, &mac[5]) < 0)
-		return -1;
-
-	return 0;
-}
 
 static int dfa2map(struct DFA_state *dfa, int map_fd)
 {
@@ -136,11 +103,9 @@ static int dfa2map(struct DFA_state *dfa, int map_fd)
 			map_key.padding = 0;
 			map_key.state = (*state)->state_id;
 			map_key.unit = (*state)->trans[i_trans].trans_char;
+			map_value.padding = 0;
+			map_value.is_acceptable = next_state->is_acceptable;
 			map_value.state = next_state->state_id;
-			map_value.final_state = next_state->is_acceptable;
-			printf("map_key size: %ld, map_value size: %ld\n", sizeof(map_key), sizeof(map_value));
-			printf("map_key - padding: %d, state: %d, unit: %c\n", map_key.padding, map_key.state, map_key.unit);
-			printf("map_value - state: %d, final_state: %d\n", map_value.state, map_value.final_state);
 			if (bpf_map_update_elem(map_fd, &map_key, &map_value, 0) < 0) {
 				fprintf(stderr,
 					"WARN: Failed to update bpf map file: err(%d):%s\n",
@@ -160,16 +125,9 @@ const char *pin_basedir = "/sys/fs/bpf";
 
 int main(int argc, char **argv)
 {
-	int i;
 	int len;
 	int map_fd;
-	bool router, ids;
 	char pin_dir[PATH_MAX];
-	unsigned char src[ETH_ALEN];
-	unsigned char dest[ETH_ALEN];
-
-	router = false;
-	ids = true;
 
 	struct config cfg = {
 		.ifindex = -1,
@@ -190,49 +148,25 @@ int main(int argc, char **argv)
 		return EXIT_FAIL_OPTION;
 	}
 
-	if (parse_mac(cfg.src_mac, src) < 0) {
-		fprintf(stderr, "ERR: can't parse mac address %s\n", cfg.src_mac);
-		return EXIT_FAIL_OPTION;
-	}
-
-	if (parse_mac(cfg.dest_mac, dest) < 0) {
-		fprintf(stderr, "ERR: can't parse mac address %s\n", cfg.dest_mac);
-		return EXIT_FAIL_OPTION;
-	}
-
 	printf("map dir: %s\n", pin_dir);
 
-	if (ids) {
-		/* Open the ids_inspect_map corresponding to the cfg.ifname interface */
-		map_fd = open_bpf_map_file(pin_dir, ids_inspect_map_name, NULL);
-		if (map_fd < 0) {
-			return EXIT_FAIL_BPF;
+	/* Open the ids_inspect_map corresponding to the cfg.ifname interface */
+	map_fd = open_bpf_map_file(pin_dir, ids_inspect_map_name, NULL);
+	if (map_fd < 0) {
+		return EXIT_FAIL_BPF;
+	} else {
+		char *re_string = "(dog)|(cat)";
+		struct DFA_state *dfa;
+		dfa = re2dfa(re_string);
+		if (!dfa) {
+			fprintf(stderr, "ERR: can't convert the RE to DFA\n");
+			return EXIT_FAIL_RE2DFA;
 		} else {
-			char *re_string = "(dog)|(cat)";
-			struct DFA_state *dfa;
-			dfa = re2dfa(re_string);
-			if (!dfa) {
-				fprintf(stderr, "ERR: can't convert the RE to DFA\n");
+			if (dfa2map(dfa, map_fd) < 0) {
+				fprintf(stderr, "ERR: can't convert the DFA to Map\n");
 				return EXIT_FAIL_RE2DFA;
-			} else {
-				if (dfa2map(dfa, map_fd) < 0) {
-					fprintf(stderr, "ERR: can't convert the DFA to Map\n");
-					return EXIT_FAIL_RE2DFA;
-				}
 			}
 		}
-	} else if (router) {
-		/* Open the tx_port map corresponding to the cfg.ifname interface */
-		map_fd = open_bpf_map_file(pin_dir, "tx_port", NULL);
-		if (map_fd < 0) {
-			return EXIT_FAIL_BPF;
-		}
-		for (i = 1; i < 5; ++i)
-			if (bpf_map_update_elem(map_fd, &i, &i, 0) < 0) {
-				fprintf(stderr,
-					"WARN: Failed to update bpf map file: err(%d):%s\n",
-					errno, strerror(errno));
-			}
 	}
 
 	return EXIT_OK;

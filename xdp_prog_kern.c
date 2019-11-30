@@ -16,6 +16,13 @@
 #define memcpy(dest, src, n) __builtin_memcpy((dest), (src), (n))
 #endif
 
+#define bpf_printk(fmt, ...)                                    \
+({                                                              \
+	char ____fmt[] = fmt;                                   \
+	bpf_trace_printk(____fmt, sizeof(____fmt),              \
+                         ##__VA_ARGS__);                        \
+})
+
 #define IDS_INSPECT_STRIDE 1
 #define IDS_INSPECT_MAP_SIZE 256
 #define IDS_INSPECT_DEPTH 100
@@ -37,15 +44,9 @@ struct ids_inspect_map_key {
 };
 
 struct ids_inspect_map_value {
-	__u16 final_state;
+	__u8 padding;
+	__u8 is_acceptable;
 	ids_inspect_state state;
-};
-
-struct bpf_map_def SEC("maps") tx_port = {
-	.type = BPF_MAP_TYPE_DEVMAP,
-	.key_size = sizeof(int),
-	.value_size = sizeof(int),
-	.max_entries = 256,
 };
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {
@@ -54,122 +55,6 @@ struct bpf_map_def SEC("maps") ids_inspect_map = {
 	.value_size = sizeof(struct ids_inspect_map_value),
 	.max_entries = IDS_INSPECT_MAP_SIZE,
 };
-
-#define AF_INET 2
-#define AF_INET6 10
-#define IPV6_FLOWINFO_MASK bpf_htonl(0x0FFFFFFF)
-
-/* from include/net/ip.h */
-static __always_inline int ip_decrease_ttl(struct iphdr *iph)
-{
-	__u32 check = iph->check;
-	check += bpf_htons(0x0100);
-	iph->check = (__u16)(check + (check >= 0xFFFF));
-	return --iph->ttl;
-}
-
-SEC("xdp_router")
-int xdp_router_func(struct xdp_md *ctx)
-{
-	void *data_end = (void *)(long)ctx->data_end;
-	void *data = (void *)(long)ctx->data;
-	struct bpf_fib_lookup fib_params = {};
-	struct ethhdr *eth = data;
-	struct ipv6hdr *ip6h;
-	struct iphdr *iph;
-	__u16 h_proto;
-	__u64 nh_off;
-	int rc;
-	int action = XDP_PASS;
-
-	nh_off = sizeof(*eth);
-	if (data + nh_off > data_end) {
-		action = XDP_DROP;
-		goto out;
-	}
-
-	h_proto = eth->h_proto;
-	if (h_proto == bpf_htons(ETH_P_IP)) {
-		iph = data + nh_off;
-
-		if (iph + 1 > data_end) {
-			action = XDP_DROP;
-			goto out;
-		}
-
-		if (iph->ttl <= 1)
-			goto out;
-
-		fib_params.family	= AF_INET;
-		fib_params.tos		= iph->tos;
-		fib_params.l4_protocol	= iph->protocol;
-		fib_params.sport	= 0;
-		fib_params.dport	= 0;
-		fib_params.tot_len	= bpf_ntohs(iph->tot_len);
-		fib_params.ipv4_src	= iph->saddr;
-		fib_params.ipv4_dst	= iph->daddr;
-	} else if (h_proto == bpf_htons(ETH_P_IPV6)) {
-		struct in6_addr *src = (struct in6_addr *) fib_params.ipv6_src;
-		struct in6_addr *dst = (struct in6_addr *) fib_params.ipv6_dst;
-
-		ip6h = data + nh_off;
-		if (ip6h + 1 > data_end) {
-			action = XDP_DROP;
-			goto out;
-		}
-
-		if (ip6h->hop_limit <= 1)
-			goto out;
-
-		fib_params.family	= AF_INET6;
-		fib_params.flowinfo	= *(__be32 *) ip6h & IPV6_FLOWINFO_MASK;
-		fib_params.l4_protocol	= ip6h->nexthdr;
-		fib_params.sport	= 0;
-		fib_params.dport	= 0;
-		fib_params.tot_len	= bpf_ntohs(ip6h->payload_len);
-		*src			= ip6h->saddr;
-		*dst			= ip6h->daddr;
-	} else {
-		goto out;
-	}
-
-	fib_params.ifindex = ctx->ingress_ifindex;
-
-	rc = bpf_fib_lookup(ctx, &fib_params, sizeof(fib_params), 0);
-	switch (rc) {
-	case BPF_FIB_LKUP_RET_SUCCESS:         /* lookup successful */
-		if (h_proto == bpf_htons(ETH_P_IP))
-			ip_decrease_ttl(iph);
-		else if (h_proto == bpf_htons(ETH_P_IPV6))
-			ip6h->hop_limit--;
-
-		memcpy(eth->h_dest, fib_params.dmac, ETH_ALEN);
-		memcpy(eth->h_source, fib_params.smac, ETH_ALEN);
-		action = bpf_redirect_map(&tx_port, fib_params.ifindex, 0);
-		break;
-	case BPF_FIB_LKUP_RET_BLACKHOLE:    /* dest is blackholed; can be dropped */
-	case BPF_FIB_LKUP_RET_UNREACHABLE:  /* dest is unreachable; can be dropped */
-	case BPF_FIB_LKUP_RET_PROHIBIT:     /* dest not allowed; can be dropped */
-		action = XDP_DROP;
-		break;
-	case BPF_FIB_LKUP_RET_NOT_FWDED:    /* packet is not forwarded */
-	case BPF_FIB_LKUP_RET_FWD_DISABLED: /* fwding is not enabled on ingress */
-	case BPF_FIB_LKUP_RET_UNSUPP_LWT:   /* fwd requires encapsulation */
-	case BPF_FIB_LKUP_RET_NO_NEIGH:     /* no neighbor entry for nh */
-	case BPF_FIB_LKUP_RET_FRAG_NEEDED:  /* fragmentation required to fwd */
-		/* PASS */
-		break;
-	}
-
-out:
-	return xdp_stats_record_action(ctx, action);
-}
-
-SEC("xdp_pass")
-int xdp_pass_func(struct xdp_md *ctx)
-{
-	return XDP_PASS;
-}
 
 static __always_inline __u16 inspect_payload(struct hdr_cursor *nh,
 											 void *data_end)
@@ -195,7 +80,7 @@ static __always_inline __u16 inspect_payload(struct hdr_cursor *nh,
 		if (!ids_map_value) {
 			/* Default rule: return to the initial state */
 			ids_map_key.state = 0;
-		} else if (ids_map_value->final_state) {
+		} else if (ids_map_value->is_acceptable) {
 			/* A pattern is matched */
 			return ids_map_value->state;
 		} else {
@@ -267,6 +152,12 @@ int xdp_ids_func(struct xdp_md *ctx)
 
 out:
 	return xdp_stats_record_action(ctx, action);
+}
+
+SEC("xdp_pass")
+int xdp_pass_func(struct xdp_md *ctx)
+{
+	return XDP_PASS;
 }
 
 char _license[] SEC("license") = "GPL";
