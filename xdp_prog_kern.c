@@ -27,7 +27,7 @@ struct payload {
 };
 
 struct bpf_map_def SEC("maps") IDS_state_map = {
-	.type = BPF_MAP_TYPE_ARRAY,
+	.type = BPF_MAP_TYPE_HASH,
 	.key_size = sizeof(struct match),
 	.value_size = sizeof(struct action),
 	.max_entries = MAX_ENTRIES,
@@ -61,7 +61,7 @@ static __always_inline int parse_payload(struct hdr_cursor *nh,
 		pl ++;
 
 	}
-	return XDP_TX;
+	return XDP_PASS;
 }
 
 SEC("xdp_IDS")

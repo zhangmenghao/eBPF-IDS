@@ -60,6 +60,7 @@ static int write_match_action_entries(int map_fd, __u16 src_state,
 	struct match mat;
 	mat.state = src_state;
 	mat.chars = chars;
+	mat.padding = 0;
 	struct action act;
 	act.state = dst_state;
 	if (bpf_map_update_elem(map_fd, &mat, &act, 0) < 0) {
