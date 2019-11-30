@@ -59,7 +59,7 @@ static int write_match_action_entries(int map_fd, __u16 src_state,
 									char chars, __u16 dst_state){
 	struct match mat;
 	mat.state = src_state;
-	mat.chars = atoi(chars);
+	mat.chars = chars;
 	struct action act;
 	act.state = dst_state;
 	if (bpf_map_update_elem(map_fd, &mat, &act, 0) < 0) {
@@ -83,7 +83,6 @@ const char *pin_basedir =  "/sys/fs/bpf";
 
 int main(int argc, char **argv)
 {
-	int i;
 	int len;
 	int map_fd;
 	bool redirect_map;
@@ -122,19 +121,19 @@ int main(int argc, char **argv)
 	if (redirect_map) {
 		printf("Err: This should not happens!");
 	} else {
-		if (write_match_action_entries(map_fd, 0, "d", 1)){
+		if (write_match_action_entries(map_fd, 0, 'd', 1)){
 			fprintf(stderr, "can't write iface params\n");
 		}
-		if (write_match_action_entries(map_fd, 1, "o", 2)){
+		if (write_match_action_entries(map_fd, 1, 'o', 2)){
 			fprintf(stderr, "can't write iface params\n");
 		}
-		if (write_match_action_entries(map_fd, 2, "g", 3)){
+		if (write_match_action_entries(map_fd, 2, 'g', 3)){
 			fprintf(stderr, "can't write iface params\n");
 		}
-		if (write_match_action_entries(map_fd, 1, "d", 1)){
+		if (write_match_action_entries(map_fd, 1, 'd', 1)){
 			fprintf(stderr, "can't write iface params\n");
 		}
-		if (write_match_action_entries(map_fd, 2, "d", 1)){
+		if (write_match_action_entries(map_fd, 2, 'd', 1)){
 			fprintf(stderr, "can't write iface params\n");
 		}
 

@@ -6,7 +6,8 @@
 
 struct match {
 	__u16 state;
-	__u16 chars;
+	__u8 chars;
+	__u8 padding;
 };
 
 struct action{

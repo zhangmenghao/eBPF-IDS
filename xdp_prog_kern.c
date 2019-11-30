@@ -23,7 +23,7 @@
 #endif
 
 struct payload {
-	__u16 payload;
+	__u8 payload;
 };
 
 struct bpf_map_def SEC("maps") IDS_state_map = {
@@ -39,6 +39,7 @@ static __always_inline int parse_payload(struct hdr_cursor *nh,
 	int i;
 	struct match mat;
 	mat.state = 0;
+	mat.padding = 0;
 
 	#pragma unroll
 	for (i = 0; i < MAX_PAYLOAD_DEPTH; i ++){
@@ -60,7 +61,7 @@ static __always_inline int parse_payload(struct hdr_cursor *nh,
 		pl ++;
 
 	}
-	return XDP_PASS;
+	return XDP_TX;
 }
 
 SEC("xdp_IDS")
@@ -95,13 +96,14 @@ int xdp_IDS_func(struct xdp_md *ctx){
 		if (parse_tcphdr(&nh, data_end, & tcphdr) < 0){
 			action = XDP_ABORTED;
 		}
+		action = parse_payload(&nh, data_end);
 	}
 	else if (nh_type == IPPROTO_UDP){
 		struct udphdr *udphdr; 
 		if (parse_udphdr(&nh, data_end, & udphdr) < 0){
 			action = XDP_ABORTED;
 		}
-		
+		action = parse_payload(&nh, data_end);
 	}
 	else if (nh_type == IPPROTO_ICMPV6){
 		struct icmp6hdr *icmp6h;
@@ -109,6 +111,7 @@ int xdp_IDS_func(struct xdp_md *ctx){
 		if (nh_type != ICMPV6_ECHO_REQUEST){
 			action = XDP_ABORTED;
 		}
+		action = parse_payload(&nh, data_end);
 	}
 	else if (nh_type == IPPROTO_ICMP){
 		struct icmphdr *icmph;
@@ -116,15 +119,13 @@ int xdp_IDS_func(struct xdp_md *ctx){
 		if (nh_type != ICMP_ECHO){
 			action = XDP_ABORTED;
 		}
+		action = parse_payload(&nh, data_end);
 	}
 	else{
 		action = XDP_ABORTED;
 	}
-
-	//payload 
-	parse_payload(&nh, data_end);
-
-	return xdp_stats_record_action(ctx, XDP_PASS);
+	
+	return xdp_stats_record_action(ctx, action);
 }
 
 SEC("xdp_pass")
