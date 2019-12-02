@@ -44,9 +44,9 @@ struct ids_inspect_map_key {
 };
 
 struct ids_inspect_map_value {
-	__u8 padding;
-	__u8 is_acceptable;
 	ids_inspect_state state;
+	__u8 is_acceptable;
+	__u8 padding;
 };
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {

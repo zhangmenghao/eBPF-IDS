@@ -122,10 +122,10 @@ $(USER_TARGETS): %: %.c $(OBJECT_LIBBPF) Makefile $(COMMON_MK) $(COMMON_OBJS) $(
 endif
 ifdef TARGET_DIR
 	mkdir -p $(TARGET_DIR)
-	$(CC) -Wall $(CFLAGS) $(LDFLAGS) -o $(TARGET_DIR)/$@ $(COMMON_OBJS) \
+	$(CC) -Wall $(CFLAGS) $(SPEC_FLAGS) $(LDFLAGS) -o $(TARGET_DIR)/$@ $(COMMON_OBJS) \
 	 $< $(LIBS)
 else
-	$(CC) -Wall $(CFLAGS) $(LDFLAGS) -o $@ $(COMMON_OBJS) \
+	$(CC) -Wall $(CFLAGS) $(SPEC_FLAGS) $(LDFLAGS) -o $@ $(COMMON_OBJS) \
 	 $< $(LIBS)
 endif
 
