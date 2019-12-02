@@ -123,10 +123,10 @@ endif
 ifdef TARGET_DIR
 	mkdir -p $(TARGET_DIR)
 	$(CC) -Wall $(CFLAGS) $(SPEC_FLAGS) $(LDFLAGS) -o $(TARGET_DIR)/$@ $(COMMON_OBJS) \
-	 $< $(LIBS)
+	 $< $(LIBS) $(SPEC_LIBS)
 else
 	$(CC) -Wall $(CFLAGS) $(SPEC_FLAGS) $(LDFLAGS) -o $@ $(COMMON_OBJS) \
-	 $< $(LIBS)
+	 $< $(LIBS) $(SPEC_LIBS)
 endif
 
 ifdef SRC_DIR
