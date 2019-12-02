@@ -13,6 +13,8 @@ COPY_LOADER := xdp_loader
 COPY_STATS  := xdp_stats
 EXTRA_DEPS := $(COMMON_DIR)/parsing_helpers.h
 
-COMMON_OBJS += $(COMMON_DIR)/re2dfa.o
+COMMON_OBJS += $(COMMON_DIR)/re2dfa.o $(COMMON_DIR)/str2dfa.o
+
+SPEC_FLAGS ?= -I/usr/include/python2.7 -lpython2.7
 
 include $(COMMON_DIR)/common.mk

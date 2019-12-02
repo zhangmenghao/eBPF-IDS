@@ -6,6 +6,9 @@
 
 /* IDS Inspect Uit */
 typedef __u8 ids_inspect_unit;
+// struct ids_inspect_unit {
+	// __u8 unit[IDS_INSPECT_STRIDE];
+// };
 
 /* IDS Inspect State */
 typedef __u16 ids_inspect_state;
@@ -18,14 +21,9 @@ struct ids_inspect_map_key {
 };
 
 struct ids_inspect_map_value {
-	__u8 padding;
-	__u8 is_acceptable;
 	ids_inspect_state state;
+	__u8 is_acceptable;
+	__u8 padding;
 };
 
-#ifndef XDP_ACTION_MAX
-#define XDP_ACTION_MAX (XDP_REDIRECT + 1)
-#endif
-
 #endif /* __COMMON_KERN_USER_H */
-

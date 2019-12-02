@@ -27,8 +27,9 @@ static const char *__doc__ = "XDP redirect helper\n"
 
 #include "common/xdp_stats_kern_user.h"
 
-/* re2dfa library */
+/* re2dfa and str2dfa library */
 #include "common/re2dfa.h"
+#include "common/str2dfa.h"
 
 #include "common_kern_user.h"
 
@@ -57,48 +58,118 @@ static const struct option_wrapper long_options[] = {
 	{{0, 0, NULL,  0 }, NULL, false}
 };
 
-static int dfa2map(struct DFA_state *dfa, int map_fd)
+static int pattern_list_len = 2;
+static char* pattern_list[] = {
+	"dog", "cat"
+};
+
+/*
+static int re2dfa2map(char *re_string, int map_fd)
 {
+	struct DFA_state *dfa;
 	struct generic_list state_list;
 	struct DFA_state **state, *next_state;
 	struct ids_inspect_map_key map_key;
 	struct ids_inspect_map_value map_value;
 	int i_state, n_state;
 
-	/* Save all state in DFA into a generic list */
+	// Convert the RE string to DFA first 
+	dfa = re2dfa(re_string);
+	if (!dfa) {
+		fprintf(stderr, "ERR: can't convert the RE to DFA\n");
+		return EXIT_FAIL_RE2DFA;
+	}
+
+	// Save all state in DFA into a generic list 
 	create_generic_list(struct DFA_state *, &state_list);
 	generic_list_push_back(&state_list, &dfa);
 	DFA_traverse(dfa, &state_list);
 
-	/* Encode each state */
+	// Encode each state 
 	n_state = state_list.length;
 	state = (struct DFA_state **) state_list.p_dat;
 	for (i_state = 0; i_state < n_state; i_state++, state++) {
 		(*state)->state_id = i_state;
 	}
 
-	/* Convert dfa to map */
+	// Convert dfa to map 
 	state = (struct DFA_state **) state_list.p_dat;
+	map_key.padding = 0;
+	map_value.padding = 0;
 	for (i_state = 0; i_state < n_state; i_state++, state++) {
 		int i_trans, n_trans = (*state)->n_transitions;
 		for (i_trans = 0; i_trans < n_trans; i_trans++) {
 			next_state = (*state)->trans[i_trans].to;
-			map_key.padding = 0;
 			map_key.state = (*state)->state_id;
 			map_key.unit = (*state)->trans[i_trans].trans_char;
-			map_value.padding = 0;
-			map_value.is_acceptable = next_state->is_acceptable;
 			map_value.state = next_state->state_id;
+			map_value.is_acceptable = next_state->is_acceptable;
 			if (bpf_map_update_elem(map_fd, &map_key, &map_value, 0) < 0) {
 				fprintf(stderr,
 					"WARN: Failed to update bpf map file: err(%d):%s\n",
 					errno, strerror(errno));
 				return -1;
+			} else {
+				printf("---------------------------------------------------\n");
+				printf(
+					"New element is added in to map (%s)\n",
+					ids_inspect_map_name);
+				printf(
+					"Key - state: %d, unit: %c\n",
+					map_key.state, map_key.unit);
+				printf(
+					"Value - is_acceptable: %d, state: %d\n",
+					map_value.is_acceptable, map_value.state);
+				printf("---------------------------------------------------\n");
 			}
 			printf("Insert match (src_state: %d, chars: %d) and action (dst_state: %d)\n", map_key.state, map_key.unit, map_value.state);
 		}
 	}
 
+	return 0;
+}
+*/
+
+static int str2dfa2map(char **pattern_list, int pattern_list_len, int map_fd) {
+	struct str2dfa_kv *map_entries;
+	int i_entry, n_entry;
+	struct ids_inspect_map_key map_key;
+	struct ids_inspect_map_value map_value;
+
+	/* Convert string to DFA first */
+	n_entry = str2dfa(pattern_list, pattern_list_len, &map_entries);
+	if (n_entry < 0) {
+		fprintf(stderr, "ERR: can't convert the String to DFA/Map\n");
+		return -1;
+	}
+
+	/* Convert dfa to map */
+	map_key.padding = 0;
+	map_value.padding = 0;
+	for (i_entry = 0; i_entry < n_entry; i_entry++) {
+		map_key.state = map_entries[i_entry].key_state;
+		map_key.unit = map_entries[i_entry].key_unit;
+		map_value.state = map_entries[i_entry].value_state;
+		map_value.is_acceptable = map_entries[i_entry].value_is_acceptable;
+		if (bpf_map_update_elem(map_fd, &map_key, &map_value, 0) < 0) {
+			fprintf(stderr,
+				"WARN: Failed to update bpf map file: err(%d):%s\n",
+				errno, strerror(errno));
+			return -1;
+		} else {
+			printf("---------------------------------------------------\n");
+			printf(
+				"New element is added in to map (%s)\n",
+				ids_inspect_map_name);
+			printf(
+				"Key - state: %d, unit: %c\n",
+				map_key.state, map_key.unit);
+			printf(
+				"Value - is_acceptable: %d, state: %d\n",
+				map_value.is_acceptable, map_value.state);
+			printf("---------------------------------------------------\n");
+		}
+	}
 	return 0;
 }
 
@@ -139,19 +210,19 @@ int main(int argc, char **argv)
 	map_fd = open_bpf_map_file(pin_dir, ids_inspect_map_name, NULL);
 	if (map_fd < 0) {
 		return EXIT_FAIL_BPF;
-	} else {
-		char *re_string = "(dog)|(cat)";
-		struct DFA_state *dfa;
-		dfa = re2dfa(re_string);
-		if (!dfa) {
-			fprintf(stderr, "ERR: can't convert the RE to DFA\n");
-			return EXIT_FAIL_RE2DFA;
-		} else {
-			if (dfa2map(dfa, map_fd) < 0) {
-				fprintf(stderr, "ERR: can't convert the DFA to Map\n");
-				return EXIT_FAIL_RE2DFA;
-			}
-		}
+	}
+
+	/* Convert the RE to DFA and map */
+	// char *re_string = "(dog)|(cat)";
+	// if (re2dfa2map(re_string, map_fd) < 0) {
+		// fprintf(stderr, "ERR: can't convert the RE to DFA/Map\n");
+		// return EXIT_FAIL_RE2DFA;
+	// }
+
+	/* Convert the string to DFA and map */
+	if (str2dfa2map(pattern_list, pattern_list_len, map_fd) < 0) {
+		fprintf(stderr, "ERR: can't convert the string to DFA/Map\n");
+		return EXIT_FAIL_RE2DFA;
 	}
 
 	return EXIT_OK;
