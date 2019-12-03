@@ -4,6 +4,7 @@
 `eval $(./testenv/testenv.sh alias)`
 
 ## Requirements
+`sudo apt install clang llvm libelf-dev gcc-multilib python-dev`
 `pip install pyahocorasick`
 
 ## Run the code
