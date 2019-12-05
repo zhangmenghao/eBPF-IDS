@@ -136,12 +136,12 @@ out:
 
 SEC("xdp_pass")
 int xdp_pass_func(struct xdp_md *ctx){
-	return XDP_PASS;
+	return xdp_stats_record_action(ctx, XDP_PASS);
 }
 
 SEC("xdp_drop")
 int xdp_drop_func(struct xdp_md *ctx){
-        return XDP_DROP;
+	return xdp_stats_record_action(ctx, XDP_DROP);
 }
 
 char _license[] SEC("license") = "GPL";
