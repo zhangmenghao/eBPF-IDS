@@ -60,7 +60,7 @@ static const struct option_wrapper long_options[] = {
 
 static int pattern_list_len = 2;
 static char* pattern_list[] = {
-	"dog", "cat"
+	"abcd", "cat"
 };
 
 /*
@@ -170,6 +170,7 @@ static int str2dfa2map(char **pattern_list, int pattern_list_len, int map_fd) {
 			printf("---------------------------------------------------\n");
 		}
 	}
+	printf("number of entries: %d\n", n_entry);
 	return 0;
 }
 

@@ -27,7 +27,7 @@
 
 #define IDS_INSPECT_STRIDE 1
 #define IDS_INSPECT_MAP_SIZE 256
-#define IDS_INSPECT_DEPTH 100
+#define IDS_INSPECT_DEPTH 219
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {
 	.type = BPF_MAP_TYPE_HASH,
@@ -137,6 +137,11 @@ out:
 SEC("xdp_pass")
 int xdp_pass_func(struct xdp_md *ctx){
 	return XDP_PASS;
+}
+
+SEC("xdp_drop")
+int xdp_drop_func(struct xdp_md *ctx){
+        return XDP_DROP;
 }
 
 char _license[] SEC("license") = "GPL";
