@@ -9,8 +9,15 @@ class DFAMatchEntriesGenerator():
         self.stride = stride
         self.table_id = table_id
         self.automaton = ahocorasick.Automaton(ahocorasick.STORE_LENGTH)
-        for pattern in pattern_list:
-            self.automaton.add_word(pattern)
+        if type(pattern_list) == list:
+            for pattern in pattern_list:
+                self.automaton.add_word(pattern)
+        elif type(pattern_list) == str:
+            pattern_file = open(pattern_list, 'r')
+            for pattern in pattern_file.readlines():
+                pattern = pattern[:-1]
+                print("Get pattern of length %d: %s" % (len(pattern), pattern))
+                self.automaton.add_word(pattern)
         self.automaton.make_automaton()
         # Gegerate dfa descriptor according to the automaton
         self.dfa = self.generate_dfa(self.automaton.dump())
@@ -204,5 +211,5 @@ def str2dfa(pattern_list):
 
 if __name__ == '__main__':
     x = DFAMatchEntriesGenerator(['dog', 'cat'], 1)
-    for i in x.get_mat_entries():
+    for i in x.get_key_value_entries():
         print(i)
