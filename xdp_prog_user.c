@@ -36,7 +36,8 @@ static const char *__doc__ = "XDP redirect helper\n"
 #define LINE_BUFFER_MAX 100
 
 static const char *ids_inspect_map_name = "ids_inspect_map";
-static const char *pattern_file_name = "patterns.txt";
+static const char *pattern_file_name = \
+		"./patterns/snort2-community-rules-content.txt";
 
 static const struct option_wrapper long_options[] = {
 
@@ -184,6 +185,8 @@ static int str2dfa2map(char **pattern_list, int pattern_number, int map_fd) {
 	if (n_entry < 0) {
 		fprintf(stderr, "ERR: can't convert the String to DFA/Map\n");
 		return -1;
+	} else {
+		printf("Totol %d entries generated from pattern list\n", n_entry);
 	}
 
 	/* Convert dfa to map */

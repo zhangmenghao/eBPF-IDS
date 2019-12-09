@@ -26,7 +26,7 @@
 })
 
 #define IDS_INSPECT_STRIDE 1
-#define IDS_INSPECT_MAP_SIZE 256
+#define IDS_INSPECT_MAP_SIZE 262144
 #define IDS_INSPECT_DEPTH 219
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {
