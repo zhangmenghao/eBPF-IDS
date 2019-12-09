@@ -11,14 +11,14 @@
 
 int
 str2dfa(char **pattern_list, int pattern_list_len, struct str2dfa_kv **result) {
-    PyObject *pName, *pModule, *pFunc, *pArgs, *pReturn;
+	PyObject *pName, *pModule, *pFunc, *pArgs, *pReturn;
 	int i_pattern, i_entry, n_entry;
 
 	Py_Initialize();
 	PyRun_SimpleString("import sys\n");
 	PyRun_SimpleString("sys.path.append('common')\n");
 
-    pName = PyString_FromString("str2dfa");
+	pName = PyString_FromString("str2dfa");
 	/* Error checking of pName left out */
 
 	pModule = PyImport_Import(pName);
@@ -99,14 +99,14 @@ str2dfa(char **pattern_list, int pattern_list_len, struct str2dfa_kv **result) {
 
 int
 str2dfa_fromfile(const char *pattern_file, struct str2dfa_kv **result) {
-    PyObject *pName, *pModule, *pFunc, *pArgs, *pReturn;
+	PyObject *pName, *pModule, *pFunc, *pArgs, *pReturn;
 	int i_pattern, i_entry, n_entry;
 
 	Py_Initialize();
 	PyRun_SimpleString("import sys\n");
 	PyRun_SimpleString("sys.path.append('common')\n");
 
-    pName = PyString_FromString("str2dfa");
+	pName = PyString_FromString("str2dfa");
 	/* Error checking of pName left out */
 
 	pModule = PyImport_Import(pName);

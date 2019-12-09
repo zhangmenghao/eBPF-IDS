@@ -36,6 +36,7 @@ static const char *__doc__ = "XDP redirect helper\n"
 #define LINE_BUFFER_MAX 160
 
 static const char *ids_inspect_map_name = "ids_inspect_map";
+static const char *accept_state_map_name = "accept_state_map";
 static const char *pattern_file_name = \
 		"./patterns/snort2-community-rules-content.txt";
 
@@ -227,11 +228,14 @@ static int str2dfa2map(char **pattern_list, int pattern_number, int map_fd) {
 }
 */
 
-static int str2dfa2map_fromfile(const char *pattern_file, int map_fd) {
+static int str2dfa2map_fromfile(const char *pattern_file,
+								int ids_map_fd, int accept_map_fd) {
 	struct str2dfa_kv *map_entries;
 	int i_entry, n_entry;
-	struct ids_inspect_map_key map_key;
-	struct ids_inspect_map_value map_value;
+	struct ids_inspect_map_key ids_map_key;
+	struct ids_inspect_map_value ids_map_value;
+	struct accept_state_map_key accept_map_key;
+	struct accept_state_map_value accept_map_value;
 
 	/* Convert string to DFA first */
 	n_entry = str2dfa_fromfile(pattern_file, &map_entries);
@@ -243,14 +247,15 @@ static int str2dfa2map_fromfile(const char *pattern_file, int map_fd) {
 	}
 
 	/* Convert dfa to map */
-	map_key.padding = 0;
-	map_value.padding = 0;
+	ids_map_key.padding = 0;
 	for (i_entry = 0; i_entry < n_entry; i_entry++) {
-		map_key.state = map_entries[i_entry].key_state;
-		map_key.unit = map_entries[i_entry].key_unit;
-		map_value.state = map_entries[i_entry].value_state;
-		map_value.is_acceptable = map_entries[i_entry].value_is_acceptable;
-		if (bpf_map_update_elem(map_fd, &map_key, &map_value, 0) < 0) {
+		ids_map_key.state = map_entries[i_entry].key_state;
+		ids_map_key.unit = map_entries[i_entry].key_unit;
+		ids_map_value.state = map_entries[i_entry].value_state;
+		accept_map_key.state = map_entries[i_entry].value_state;
+		accept_map_value.flag = map_entries[i_entry].value_is_acceptable;
+		if (bpf_map_update_elem(ids_map_fd,
+								&ids_map_key, &ids_map_value, 0) < 0) {
 			fprintf(stderr,
 				"WARN: Failed to update bpf map file: err(%d):%s\n",
 				errno, strerror(errno));
@@ -262,11 +267,25 @@ static int str2dfa2map_fromfile(const char *pattern_file, int map_fd) {
 				ids_inspect_map_name);
 			printf(
 				"Key - state: %d, unit: %c\n",
-				map_key.state, map_key.unit);
+				ids_map_key.state, ids_map_key.unit);
 			printf(
-				"Value - is_acceptable: %d, state: %d\n",
-				map_value.is_acceptable, map_value.state);
+				"Value - state: %d\n", ids_map_value.state);
 			printf("---------------------------------------------------\n");
+		}
+		if (accept_map_value.flag > 0) {
+			if (bpf_map_update_elem(accept_map_fd,
+								&accept_map_key, &accept_map_value, 0) < 0) {
+				fprintf(stderr,
+						"WARN: Failed to update bpf map file: err(%d):%s\n",
+						errno, strerror(errno));
+				return -1;
+			} else {
+				printf("---------------------------------------------------\n");
+				printf("Map (%s) is also updated\n", accept_state_map_name);
+				printf("Key - state: %d\n", accept_map_key.state);
+				printf("Value - flag: %d\n", accept_map_value.flag);
+				printf("---------------------------------------------------\n");
+			}
 		}
 	}
 	printf("\nTotal entries are inserted: %d\n\n", n_entry);
@@ -282,10 +301,8 @@ const char *pin_basedir = "/sys/fs/bpf";
 int main(int argc, char **argv)
 {
 	int len;
-	int map_fd;
+	int ids_map_fd, accept_map_fd;
 	char pin_dir[PATH_MAX];
-	// int pattern_number;
-	// char **pattern_list;
 
 	struct config cfg = {
 		.ifindex = -1,
@@ -308,32 +325,18 @@ int main(int argc, char **argv)
 
 	printf("map dir: %s\n", pin_dir);
 
-	/* Open the ids_inspect_map corresponding to the cfg.ifname interface */
-	map_fd = open_bpf_map_file(pin_dir, ids_inspect_map_name, NULL);
-	if (map_fd < 0) {
+	/* Open the maps corresponding to the cfg.ifname interface */
+	ids_map_fd = open_bpf_map_file(pin_dir, ids_inspect_map_name, NULL);
+	if (ids_map_fd < 0) {
+		return EXIT_FAIL_BPF;
+	}
+	accept_map_fd = open_bpf_map_file(pin_dir, accept_state_map_name, NULL);
+	if (accept_map_fd < 0) {
 		return EXIT_FAIL_BPF;
 	}
 
-	/* Convert the RE to DFA and map */
-	// char *re_string = "(dog)|(cat)";
-	// if (re2dfa2map(re_string, map_fd) < 0) {
-		// fprintf(stderr, "ERR: can't convert the RE to DFA/Map\n");
-		// return EXIT_FAIL_RE2DFA;
-	// }
-
-	/*
-	pattern_number = get_number_of_nonblank_lines(pattern_file_name);
-	pattern_list = (char **)malloc(sizeof(char *) * pattern_number);
-
-	if (get_pattern_list(pattern_file_name, &pattern_list) < 0) {
-		fprintf(stderr, "ERR: can not pattern list from pattern source file\n");
-		return EXIT_FAIL_RE2DFA;
-	}
-	*/
-
 	/* Convert the string to DFA and map */
-	// if (str2dfa2map(pattern_list, pattern_number, map_fd) < 0) {
-	if (str2dfa2map_fromfile(pattern_file_name, map_fd) < 0) {
+	if (str2dfa2map_fromfile(pattern_file_name, ids_map_fd,accept_map_fd) < 0) {
 		fprintf(stderr, "ERR: can't convert the string to DFA/Map\n");
 		return EXIT_FAIL_RE2DFA;
 	}

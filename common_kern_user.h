@@ -13,6 +13,9 @@ typedef __u8 ids_inspect_unit;
 /* IDS Inspect State */
 typedef __u16 ids_inspect_state;
 
+/* Accept state flag */
+typedef __u16 accept_state_flag;
+
 /* Key-Value of ids_inspect_map */
 struct ids_inspect_map_key {
 	ids_inspect_state state;
@@ -22,8 +25,15 @@ struct ids_inspect_map_key {
 
 struct ids_inspect_map_value {
 	ids_inspect_state state;
-	__u8 is_acceptable;
-	__u8 padding;
+};
+
+struct accept_state_map_key {
+	ids_inspect_state state;
+	__u16 padding;
+};
+
+struct accept_state_map_value {
+	accept_state_flag flag;
 };
 
 #endif /* __COMMON_KERN_USER_H */

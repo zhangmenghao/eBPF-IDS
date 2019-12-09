@@ -363,6 +363,11 @@ run_tcpdump()
     fi
 }
 
+run_printk()
+{
+    cat /sys/kernel/debug/tracing/trace_pipe
+}
+
 status()
 {
     get_nsname
@@ -466,6 +471,7 @@ usage()
     echo "unload                  Unload XDP program on outer interface"
     echo "tcpdump                 Run on outer interface (or inner with --inner)"
     echo "stats                   Run the XDP statistics program"
+    echo "printk                  Print message from eBPF program into tracefs buffer"
     echo "redirect <env1> <env2>  Setup redirects for packet03 lessons"
     echo ""
 
@@ -573,7 +579,7 @@ case "$1" in
     "exec")
         CMD=ns_exec
         ;;
-    ping|tcpdump)
+    ping|tcpdump|printk)
         CMD="run_$1"
         ;;
     redirect)
