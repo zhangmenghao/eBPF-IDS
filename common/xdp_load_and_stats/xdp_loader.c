@@ -105,6 +105,25 @@ int pin_maps_in_bpf_object(struct bpf_object *bpf_obj, struct config *cfg)
 	if (err)
 		return EXIT_FAIL_BPF;
 
+	int idx = 0, prog_fd = 0;
+	struct bpf_program *bpf_prog = bpf_object__find_program_by_title(bpf_obj, "xdp_test");
+	if (!bpf_prog) {
+		printf("???\n");
+	}
+	prog_fd = bpf_program__fd(bpf_prog);
+	int jump_map_fd = open_bpf_map_file(cfg->pin_dir, "tail_call_map", NULL);
+	if (jump_map_fd < 0) {
+		return EXIT_FAIL_BPF;
+	}
+	if (bpf_map_update_elem(jump_map_fd, &idx, &prog_fd, 0) < 0) {
+		fprintf(stderr,
+			"WARN: Failed to update bpf map tail_call_map: err(%d):%s\n",
+			errno, strerror(errno));
+		return -1;
+	}
+	else {
+		printf("success?!\n");
+	}
 	return 0;
 }
 

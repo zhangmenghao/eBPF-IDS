@@ -27,8 +27,9 @@
 
 #define IDS_INSPECT_STRIDE 1
 #define IDS_INSPECT_MAP_SIZE 262144
-#define IDS_INSPECT_DEPTH 219
+#define IDS_INSPECT_DEPTH 200
 #define ACCEPT_STATE_MAP_SIZE 4096
+#define TAIL_CALL_MAP_SIZE 8
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {
 	.type = BPF_MAP_TYPE_HASH,
@@ -44,8 +45,15 @@ struct bpf_map_def SEC("maps") accept_state_map = {
 	.max_entries = ACCEPT_STATE_MAP_SIZE,
 };
 
-static __always_inline __u16 inspect_payload(struct hdr_cursor *nh,
-											 void *data_end)
+struct bpf_map_def SEC("maps") tail_call_map = {
+	.type = BPF_MAP_TYPE_PROG_ARRAY,
+	.key_size = sizeof(__u32),
+	.value_size = sizeof(__u32),
+	.max_entries = TAIL_CALL_MAP_SIZE,
+};
+
+static __always_inline accept_state_flag inspect_payload(struct hdr_cursor *nh,
+														 void *data_end)
 {
 	// struct ids_inspect_unit *ids_unit = nh->pos;
 	ids_inspect_unit *ids_unit = nh->pos;
@@ -60,7 +68,7 @@ static __always_inline __u16 inspect_payload(struct hdr_cursor *nh,
 	accept_map_key.state = 0;
 	accept_map_key.padding = 0;
 
-	#pragma unroll
+	// #pragma unroll
 	for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
 		if (ids_unit + 1 > data_end) {
 			break;
@@ -151,17 +159,28 @@ int xdp_ids_func(struct xdp_md *ctx)
 	}
 
 out:
+	bpf_tail_call(ctx, &tail_call_map, 0);
+	bpf_printk("Tail call failed!\n");
 	return xdp_stats_record_action(ctx, action);
 }
 
 SEC("xdp_pass")
-int xdp_pass_func(struct xdp_md *ctx){
+int xdp_pass_func(struct xdp_md *ctx)
+{
 	return xdp_stats_record_action(ctx, XDP_PASS);
 }
 
 SEC("xdp_drop")
-int xdp_drop_func(struct xdp_md *ctx){
+int xdp_drop_func(struct xdp_md *ctx)
+{
 	return xdp_stats_record_action(ctx, XDP_DROP);
+}
+
+SEC("xdp_test")
+int xdp_test_func(struct xdp_md *ctx)
+{
+	bpf_printk("Tail call success!\n");
+	return xdp_stats_record_action(ctx, XDP_PASS);
 }
 
 char _license[] SEC("license") = "GPL";
