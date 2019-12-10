@@ -18,6 +18,8 @@ static const char *__doc__ = "XDP loader\n"
 #include <net/if.h>
 #include <linux/if_link.h> /* depend on kernel-headers installed */
 
+#include <sys/resource.h>
+
 #include "../common_params.h"
 #include "../common_user_bpf_xdp.h"
 #include "../common_libbpf.h"
@@ -110,6 +112,7 @@ int main(int argc, char **argv)
 {
 	struct bpf_object *bpf_obj;
 	int err, len;
+	struct rlimit rlim = {RLIM_INFINITY, RLIM_INFINITY};
 
 	struct config cfg = {
 		.xdp_flags = XDP_FLAGS_UPDATE_IF_NOEXIST | XDP_FLAGS_DRV_MODE,
@@ -140,6 +143,14 @@ int main(int argc, char **argv)
 		return EXIT_FAIL_OPTION;
 	}
 
+	/* Allow unlimited locking of memory, so all memory needed for packet
+	 * buffers can be locked.
+	 */
+	if (setrlimit(RLIMIT_MEMLOCK, &rlim)) {
+		fprintf(stderr, "ERROR: setrlimit(RLIMIT_MEMLOCK) \"%s\"\n",
+			strerror(errno));
+		exit(EXIT_FAILURE);
+	}
 
 	bpf_obj = load_bpf_and_xdp_attach(&cfg);
 	if (!bpf_obj)
