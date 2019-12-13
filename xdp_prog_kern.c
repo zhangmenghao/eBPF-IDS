@@ -212,19 +212,17 @@ int xdp_dpi_func(struct xdp_md *ctx)
 
 	/* Compute current packet pointer */
 	nh.pos = data;
+
 	if (meta + 1 > data) {
 		return XDP_ABORTED;
 	}
+
 	if (nh.pos + meta->unit > data_end) {
 		action = XDP_ABORTED;
 		goto out;
 	}
 	nh.pos += meta->unit;
-	if (nh.pos + meta->unit > data_end) {
-		action = XDP_ABORTED;
-		goto out;
-	}
-	nh.pos += meta->unit;
+
 	if ((nh.pos + meta->tens * 10) > data_end) {
 		action = XDP_ABORTED;
 		goto out;
