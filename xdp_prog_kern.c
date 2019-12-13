@@ -52,6 +52,12 @@ struct bpf_map_def SEC("maps") tail_call_map = {
 	.max_entries = TAIL_CALL_MAP_SIZE,
 };
 
+struct meta_info {
+	__u8 unit;
+	__u8 tens;
+	__u16 raw;
+} __attribute__((aligned(4)));
+
 static __always_inline accept_state_flag inspect_payload(struct hdr_cursor *nh,
 														 void *data_end)
 {
@@ -68,7 +74,7 @@ static __always_inline accept_state_flag inspect_payload(struct hdr_cursor *nh,
 	accept_map_key.state = 0;
 	accept_map_key.padding = 0;
 
-	// #pragma unroll
+	#pragma unroll
 	for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
 		if (ids_unit + 1 > data_end) {
 			break;
@@ -105,14 +111,14 @@ int xdp_ids_func(struct xdp_md *ctx)
 {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
-	struct hdr_cursor nh = { .pos = data };
+	struct meta_info *meta;
+	struct hdr_cursor nh;
 	int eth_type, ip_type;
 	struct ethhdr *eth;
 	struct iphdr *iph;
 	struct ipv6hdr *ip6h;
 	struct udphdr *udph;
 	struct tcphdr *tcph;
-	ids_inspect_state ids_state;
 
 	/* Default action XDP_PASS, imply everything we couldn't parse, or that
 	 * we don't want to deal with, we just pass up the stack and let the
@@ -120,12 +126,36 @@ int xdp_ids_func(struct xdp_md *ctx)
 	 */
 	__u32 action = XDP_PASS; /* Default action */
 
+	/* Prepare space for metadata */
+	if (bpf_xdp_adjust_meta(ctx, -(int)sizeof(*meta)) < 0) {
+		action = XDP_ABORTED;
+		goto out;
+	}
+
+	/* Actually, I do not understand why we should reassign value to data.
+	 * But without the reassignment below, the program can not be loaded...
+	 */
+	data = (void *)(long)ctx->data;
+	data_end = (void *)(long)ctx->data_end;
+	nh.pos = data;
+
+	/* Check the validity */
+	meta = (void *)(long)ctx->data_meta;
+	if (meta + 1 > data) {
+		action = XDP_ABORTED;
+		goto out;
+	}
+
+	/* Parse packet */
 	eth_type = parse_ethhdr(&nh, data_end, &eth);
+	meta->raw += sizeof(*eth);
 
 	if (eth_type == bpf_htons(ETH_P_IP)) {
 		ip_type = parse_iphdr(&nh, data_end, &iph);
+		meta->raw += sizeof(*iph);
 	} else if (eth_type == bpf_htons(ETH_P_IPV6)) {
 		ip_type = parse_ip6hdr(&nh, data_end, &ip6h);
+		meta->raw += sizeof(*ip6h);
 	} else {
 		goto out;
 	}
@@ -135,32 +165,87 @@ int xdp_ids_func(struct xdp_md *ctx)
 			action = XDP_ABORTED;
 			goto out;
 		} else {
-			ids_state = inspect_payload(&nh, data_end);
-			if (ids_state > 0) {
-				action = XDP_DROP;
-				bpf_printk("The %dth pattern is triggered\n", ids_state);
-				goto out;
-			}
+			meta->raw += sizeof(*tcph);
 		}
 	} else if (ip_type == IPPROTO_UDP) {
 		if (parse_udphdr(&nh, data_end, &udph) < 0) {
 			action = XDP_ABORTED;
 			goto out;
 		} else {
-			ids_state = inspect_payload(&nh, data_end);
-			if (ids_state > 0) {
-				action = XDP_DROP;
-				bpf_printk("Rule %d is triggered\n", ids_state);
-				goto out;
-			}
+			meta->raw += sizeof(*udph);
 		}
 	} else {
 		goto out;
 	}
 
-out:
+	/* Only packet with valid TCP/UDP header will reach here */
+	meta->unit = meta->raw % 10;
+	meta->tens = meta->raw / 10;
+	/* Debug info */
+	// bpf_printk("Packet start pointer: %u\n", data);
+	// bpf_printk("Current packet pointer: %u\n", nh.pos);
+	// bpf_printk("Packet end pointer: %u\n", data_end);
 	bpf_tail_call(ctx, &tail_call_map, 0);
 	bpf_printk("Tail call failed!\n");
+
+out:
+	return xdp_stats_record_action(ctx, action);
+}
+
+SEC("xdp_dpi")
+int xdp_dpi_func(struct xdp_md *ctx)
+{
+	void *data = (void *)(long)ctx->data;
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data_meta = (void *)(long)ctx->data_meta;
+	// __u8 *meta = data_meta;
+	struct meta_info *meta = data_meta;
+	// struct meta_info *test = data_meta;
+	struct hdr_cursor nh;
+	ids_inspect_state ids_state = 0;
+
+	/* Default action XDP_PASS, imply everything we couldn't parse, or that
+	 * we don't want to deal with, we just pass up the stack and let the
+	 * kernel deal with it.
+	 */
+	__u32 action = XDP_PASS; /* Default action */
+
+	/* Compute current packet pointer */
+	nh.pos = data;
+	if (meta + 1 > data) {
+		return XDP_ABORTED;
+	}
+	if (nh.pos + meta->unit > data_end) {
+		action = XDP_ABORTED;
+		goto out;
+	}
+	nh.pos += meta->unit;
+	if (nh.pos + meta->unit > data_end) {
+		action = XDP_ABORTED;
+		goto out;
+	}
+	nh.pos += meta->unit;
+	if ((nh.pos + meta->tens * 10) > data_end) {
+		action = XDP_ABORTED;
+		goto out;
+	}
+	nh.pos += meta->tens * 10;
+
+	/* Debug info */
+	// bpf_printk("Tail call success!\n");
+	// bpf_printk("meta: %u\n", meta->raw);
+	// bpf_printk("Packet start pointer: %u\n", data);
+	// bpf_printk("Current packet pointer: %u\n", nh.pos);
+	// bpf_printk("Packet end pointer: %u\n", data_end);
+
+	ids_state = inspect_payload(&nh, data_end);
+	if (ids_state > 0) {
+		action = XDP_DROP;
+		bpf_printk("The %dth pattern is triggered\n", ids_state);
+		goto out;
+	}
+
+out:
 	return xdp_stats_record_action(ctx, action);
 }
 
@@ -174,13 +259,6 @@ SEC("xdp_drop")
 int xdp_drop_func(struct xdp_md *ctx)
 {
 	return xdp_stats_record_action(ctx, XDP_DROP);
-}
-
-SEC("xdp_test")
-int xdp_test_func(struct xdp_md *ctx)
-{
-	bpf_printk("Tail call success!\n");
-	return xdp_stats_record_action(ctx, XDP_PASS);
 }
 
 char _license[] SEC("license") = "GPL";

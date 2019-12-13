@@ -22,6 +22,10 @@ struct config {
 	char dest_mac[18];
 	__u16 xsk_bind_flags;
 	int xsk_if_queue;
+	char tail_call_map_name[32];
+	int tail_call_map_entry_count;
+	int tail_call_map_idx[32];
+	char tail_call_map_progsec[32][32];
 	bool xsk_poll_mode;
 };
 

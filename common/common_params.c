@@ -92,7 +92,7 @@ void parse_cmdline_args(int argc, char **argv,
 	}
 
 	/* Parse commands line args */
-	while ((opt = getopt_long(argc, argv, "hd:r:L:R:ASNFUMQ:czpq",
+	while ((opt = getopt_long(argc, argv, "hd:r:t:s:L:R:ASNFUMQ:czpq",
 				  long_options, &longindex)) != -1) {
 		switch (opt) {
 		case 'd':
@@ -124,6 +124,22 @@ void parse_cmdline_args(int argc, char **argv,
 						errno, strerror(errno));
 				goto error;
 			}
+			break;
+		case 't':
+			if (strlen(optarg) >= 32) {
+				fprintf(stderr, "ERR: --tailmap-name name too long\n");
+				goto error;
+			}
+			strncpy(cfg->tail_call_map_name, optarg, 32);
+			break;
+		case 's':
+			if (sscanf(optarg, "%d:%s",
+			  &(cfg->tail_call_map_idx[cfg->tail_call_map_entry_count]),
+			  cfg->tail_call_map_progsec[cfg->tail_call_map_entry_count]) < 2) {
+				fprintf(stderr, "ERR: --tail-call <entry> with wrong format\n");
+				goto error;
+			}
+			cfg->tail_call_map_entry_count += 1;
 			break;
 		case 'A':
 			cfg->xdp_flags &= ~XDP_FLAGS_MODES;    /* Clear flags */
