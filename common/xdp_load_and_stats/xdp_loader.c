@@ -130,6 +130,7 @@ int set_tail_call_map(struct bpf_object *bpf_obj, struct config *cfg)
 	n_entry = cfg->tail_call_map_entry_count;
 
 	for (i_entry = 0; i_entry < n_entry; i_entry++) {
+		map_idx = cfg->tail_call_map_idx[i_entry];
 		bpf_prog = bpf_object__find_program_by_title(
 			bpf_obj, cfg->tail_call_map_progsec[i_entry]);
 		if (!bpf_prog) {
