@@ -27,9 +27,9 @@
 
 #define IDS_INSPECT_STRIDE 1
 #define IDS_INSPECT_MAP_SIZE 262144
-#define IDS_INSPECT_DEPTH 160
+#define IDS_INSPECT_DEPTH 140
 #define ACCEPT_STATE_MAP_SIZE 4096
-#define TAIL_CALL_MAP_SIZE 8
+#define TAIL_CALL_MAP_SIZE 1
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {
 	.type = BPF_MAP_TYPE_HASH,
@@ -73,7 +73,7 @@ static __always_inline int inspect_payload(struct hdr_cursor *nh,void *data_end)
 	accept_map_key.state = 0;
 	accept_map_key.padding = 0;
 
-	// #pragma unroll
+	#pragma unroll
 	for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
 		ids_unit = nh->pos;
 		if (ids_unit + 1 > data_end) {

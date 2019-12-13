@@ -13,13 +13,13 @@ if __name__ == '__main__':
     if sys.argv[1] == 'T':
         pkt = pkt/TCP()
         payload_length = int(sys.argv[3]) - len(pkt) - len(sys.argv[2])
-        pkt = pkt/Raw(' ' * payload_length + sys.argv[2])
+        pkt = pkt/Raw('#' * payload_length + sys.argv[2])
     elif sys.argv[1] == 'I':
         pkt = pkt/ICMPv6EchoRequest()
     elif sys.argv[1] == 'U':
         pkt = pkt/UDP()
         payload_length = int(sys.argv[3]) - len(pkt) - len(sys.argv[2])
-        pkt = pkt/Raw(' ' * payload_length + sys.argv[2])
+        pkt = pkt/Raw('#' * payload_length + sys.argv[2])
     else:
         print("Error!")
     pkt.show()
