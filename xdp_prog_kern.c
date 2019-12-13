@@ -27,7 +27,7 @@
 
 #define IDS_INSPECT_STRIDE 1
 #define IDS_INSPECT_MAP_SIZE 262144
-#define IDS_INSPECT_DEPTH 200
+#define IDS_INSPECT_DEPTH 160
 #define ACCEPT_STATE_MAP_SIZE 4096
 #define TAIL_CALL_MAP_SIZE 8
 
@@ -58,11 +58,10 @@ struct meta_info {
 	__u16 raw;
 } __attribute__((aligned(4)));
 
-static __always_inline accept_state_flag inspect_payload(struct hdr_cursor *nh,
-														 void *data_end)
+static __always_inline int inspect_payload(struct hdr_cursor *nh,void *data_end)
 {
 	// struct ids_inspect_unit *ids_unit = nh->pos;
-	ids_inspect_unit *ids_unit = nh->pos;
+	ids_inspect_unit *ids_unit;
 	struct ids_inspect_map_key ids_map_key;
 	struct ids_inspect_map_value *ids_map_value;
 	struct accept_state_map_key accept_map_key;
@@ -74,10 +73,12 @@ static __always_inline accept_state_flag inspect_payload(struct hdr_cursor *nh,
 	accept_map_key.state = 0;
 	accept_map_key.padding = 0;
 
-	#pragma unroll
+	// #pragma unroll
 	for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
+		ids_unit = nh->pos;
 		if (ids_unit + 1 > data_end) {
-			break;
+			/* Reach the last byte of the packet */
+			return 0;
 		}
 		// memcpy(ids_map_key.unit.unit, ids_unit, IDS_INSPECT_STRIDE);
 		// memcpy(&(ids_map_key.unit), ids_unit, IDS_INSPECT_STRIDE);
@@ -95,15 +96,16 @@ static __always_inline accept_state_flag inspect_payload(struct hdr_cursor *nh,
 				/* Go to the next state according to DFA */
 				ids_map_key.state = ids_map_value->state;
 			} else {
-				/* An acceptable state */
+				/* An acceptable state, return the hit pattern number ( > 0) */
 				return accept_map_value->flag;
 			}
 		}
 		/* Prepare for next scanning */
-		ids_unit += 1;
+		nh->pos += 1;
 	}
 
-	return 0;
+	/* The payload is not inspected completely */
+	return -1;
 }
 
 SEC("xdp_ids")
@@ -148,14 +150,11 @@ int xdp_ids_func(struct xdp_md *ctx)
 
 	/* Parse packet */
 	eth_type = parse_ethhdr(&nh, data_end, &eth);
-	meta->raw += sizeof(*eth);
 
 	if (eth_type == bpf_htons(ETH_P_IP)) {
 		ip_type = parse_iphdr(&nh, data_end, &iph);
-		meta->raw += sizeof(*iph);
 	} else if (eth_type == bpf_htons(ETH_P_IPV6)) {
 		ip_type = parse_ip6hdr(&nh, data_end, &ip6h);
-		meta->raw += sizeof(*ip6h);
 	} else {
 		goto out;
 	}
@@ -164,29 +163,25 @@ int xdp_ids_func(struct xdp_md *ctx)
 		if (parse_tcphdr(&nh, data_end, &tcph) < 0) {
 			action = XDP_ABORTED;
 			goto out;
-		} else {
-			meta->raw += sizeof(*tcph);
 		}
 	} else if (ip_type == IPPROTO_UDP) {
 		if (parse_udphdr(&nh, data_end, &udph) < 0) {
 			action = XDP_ABORTED;
 			goto out;
-		} else {
-			meta->raw += sizeof(*udph);
 		}
 	} else {
 		goto out;
 	}
 
 	/* Only packet with valid TCP/UDP header will reach here */
+	meta->raw = nh.pos - data;
 	meta->unit = meta->raw % 10;
 	meta->tens = meta->raw / 10;
 	/* Debug info */
-	// bpf_printk("Packet start pointer: %u\n", data);
+	// bpf_printk("meta: %u\n", meta->raw);
 	// bpf_printk("Current packet pointer: %u\n", nh.pos);
-	// bpf_printk("Packet end pointer: %u\n", data_end);
 	bpf_tail_call(ctx, &tail_call_map, 0);
-	bpf_printk("Tail call failed!\n");
+	bpf_printk("Tail call fails in xdp_ids!\n");
 
 out:
 	return xdp_stats_record_action(ctx, action);
@@ -198,11 +193,9 @@ int xdp_dpi_func(struct xdp_md *ctx)
 	void *data = (void *)(long)ctx->data;
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data_meta = (void *)(long)ctx->data_meta;
-	// __u8 *meta = data_meta;
 	struct meta_info *meta = data_meta;
-	// struct meta_info *test = data_meta;
 	struct hdr_cursor nh;
-	ids_inspect_state ids_state = 0;
+	int ids_state = 0;
 
 	/* Default action XDP_PASS, imply everything we couldn't parse, or that
 	 * we don't want to deal with, we just pass up the stack and let the
@@ -232,14 +225,21 @@ int xdp_dpi_func(struct xdp_md *ctx)
 	/* Debug info */
 	// bpf_printk("Tail call success!\n");
 	// bpf_printk("meta: %u\n", meta->raw);
-	// bpf_printk("Packet start pointer: %u\n", data);
 	// bpf_printk("Current packet pointer: %u\n", nh.pos);
-	// bpf_printk("Packet end pointer: %u\n", data_end);
 
 	ids_state = inspect_payload(&nh, data_end);
 	if (ids_state > 0) {
 		action = XDP_DROP;
 		bpf_printk("The %dth pattern is triggered\n", ids_state);
+		goto out;
+	} else if (ids_state < 0) {
+		meta->raw = nh.pos - data;
+		meta->unit = meta->raw % 10;
+		meta->tens = meta->raw / 10;
+		bpf_tail_call(ctx, &tail_call_map, 0);
+		bpf_printk("Tail call fails in xdp_dpi!\n");
+	} else {
+		/* The packet is inspected completely */
 		goto out;
 	}
 
