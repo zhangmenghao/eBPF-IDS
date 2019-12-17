@@ -12,7 +12,7 @@ struct str2dfa_kv {
 	long key_state;
 	char key_unit;
 	long value_state;
-	long value_is_acceptable;
+	long value_flag;
 };
 
 int str2dfa(char **, int, struct str2dfa_kv **);

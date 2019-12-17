@@ -32,14 +32,14 @@
 #define TAIL_CALL_MAP_SIZE 1
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {
-	.type = BPF_MAP_TYPE_HASH,
+	.type = BPF_MAP_TYPE_PERCPU_HASH,
 	.key_size = sizeof(struct ids_inspect_map_key),
 	.value_size = sizeof(struct ids_inspect_map_value),
 	.max_entries = IDS_INSPECT_MAP_SIZE,
 };
 
 struct bpf_map_def SEC("maps") accept_state_map = {
-	.type = BPF_MAP_TYPE_HASH,
+	.type = BPF_MAP_TYPE_PERCPU_HASH,
 	.key_size = sizeof(struct accept_state_map_key),
 	.value_size = sizeof(struct accept_state_map_value),
 	.max_entries = ACCEPT_STATE_MAP_SIZE,

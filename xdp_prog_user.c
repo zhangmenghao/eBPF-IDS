@@ -38,7 +38,8 @@ static const char *__doc__ = "XDP redirect helper\n"
 static const char *ids_inspect_map_name = "ids_inspect_map";
 static const char *accept_state_map_name = "accept_state_map";
 static const char *pattern_file_name = \
-		"./patterns/snort2-community-rules-content.txt";
+		/* "./patterns/snort2-community-rules-content.txt"; */
+		"./patterns/patterns.txt";
 
 static const struct option_wrapper long_options[] = {
 
@@ -103,7 +104,7 @@ static int re2dfa2map(char *re_string, int map_fd)
 			map_key.state = (*state)->state_id;
 			map_key.unit = (*state)->trans[i_trans].trans_char;
 			map_value.state = next_state->state_id;
-			map_value.is_acceptable = next_state->is_acceptable;
+			map_value.flag = next_state->flag;
 			if (bpf_map_update_elem(map_fd, &map_key, &map_value, 0) < 0) {
 				fprintf(stderr,
 					"WARN: Failed to update bpf map file: err(%d):%s\n",
@@ -118,8 +119,8 @@ static int re2dfa2map(char *re_string, int map_fd)
 					"Key - state: %d, unit: %c\n",
 					map_key.state, map_key.unit);
 				printf(
-					"Value - is_acceptable: %d, state: %d\n",
-					map_value.is_acceptable, map_value.state);
+					"Value - flag: %d, state: %d\n",
+					map_value.flag, map_value.state);
 				printf("---------------------------------------------------\n");
 			}
 			printf("Insert match (src_state: %d, chars: %d) and action (dst_state: %d)\n", map_key.state, map_key.unit, map_value.state);
@@ -203,7 +204,7 @@ static int str2dfa2map(char **pattern_list, int pattern_number, int map_fd) {
 		map_key.state = map_entries[i_entry].key_state;
 		map_key.unit = map_entries[i_entry].key_unit;
 		map_value.state = map_entries[i_entry].value_state;
-		map_value.is_acceptable = map_entries[i_entry].value_is_acceptable;
+		map_value.flag = map_entries[i_entry].value_flag;
 		if (bpf_map_update_elem(map_fd, &map_key, &map_value, 0) < 0) {
 			fprintf(stderr,
 				"WARN: Failed to update bpf map file: err(%d):%s\n",
@@ -218,8 +219,8 @@ static int str2dfa2map(char **pattern_list, int pattern_number, int map_fd) {
 				"Key - state: %d, unit: %c\n",
 				map_key.state, map_key.unit);
 			printf(
-				"Value - is_acceptable: %d, state: %d\n",
-				map_value.is_acceptable, map_value.state);
+				"Value - flag: %d, state: %d\n",
+				map_value.flag, map_value.state);
 			printf("---------------------------------------------------\n");
 		}
 	}
@@ -232,10 +233,15 @@ static int str2dfa2map_fromfile(const char *pattern_file,
 								int ids_map_fd, int accept_map_fd) {
 	struct str2dfa_kv *map_entries;
 	int i_entry, n_entry;
+	int i_cpu, n_cpu = libbpf_num_possible_cpus();
 	struct ids_inspect_map_key ids_map_key;
-	struct ids_inspect_map_value ids_map_value;
+	struct ids_inspect_map_value ids_map_values[n_cpu];
 	struct accept_state_map_key accept_map_key;
-	struct accept_state_map_value accept_map_value;
+	struct accept_state_map_value accept_map_values[n_cpu];
+	ids_inspect_state value_state;
+	accept_state_flag value_flag;
+
+	printf("Number of CPUs: %d\n", n_cpu);
 
 	/* Convert string to DFA first */
 	n_entry = str2dfa_fromfile(pattern_file, &map_entries);
@@ -248,14 +254,19 @@ static int str2dfa2map_fromfile(const char *pattern_file,
 
 	/* Convert dfa to map */
 	ids_map_key.padding = 0;
+	accept_map_key.padding = 0;
 	for (i_entry = 0; i_entry < n_entry; i_entry++) {
 		ids_map_key.state = map_entries[i_entry].key_state;
 		ids_map_key.unit = map_entries[i_entry].key_unit;
-		ids_map_value.state = map_entries[i_entry].value_state;
 		accept_map_key.state = map_entries[i_entry].value_state;
-		accept_map_value.flag = map_entries[i_entry].value_is_acceptable;
+		value_state = map_entries[i_entry].value_state;
+		value_flag = map_entries[i_entry].value_flag;
+		for (i_cpu = 0; i_cpu < n_cpu; i_cpu++) {
+			ids_map_values[i_cpu].state = value_state;
+			accept_map_values[i_cpu].flag = value_flag;
+		}
 		if (bpf_map_update_elem(ids_map_fd,
-								&ids_map_key, &ids_map_value, 0) < 0) {
+								&ids_map_key, ids_map_values, 0) < 0) {
 			fprintf(stderr,
 				"WARN: Failed to update bpf map file: err(%d):%s\n",
 				errno, strerror(errno));
@@ -268,13 +279,12 @@ static int str2dfa2map_fromfile(const char *pattern_file,
 			printf(
 				"Key - state: %d, unit: %c\n",
 				ids_map_key.state, ids_map_key.unit);
-			printf(
-				"Value - state: %d\n", ids_map_value.state);
+			printf("Value - state: %d\n", value_state);
 			printf("---------------------------------------------------\n");
 		}
-		if (accept_map_value.flag > 0) {
+		if (value_flag > 0) {
 			if (bpf_map_update_elem(accept_map_fd,
-								&accept_map_key, &accept_map_value, 0) < 0) {
+								&accept_map_key, accept_map_values, 0) < 0) {
 				fprintf(stderr,
 						"WARN: Failed to update bpf map file: err(%d):%s\n",
 						errno, strerror(errno));
@@ -283,12 +293,27 @@ static int str2dfa2map_fromfile(const char *pattern_file,
 				printf("---------------------------------------------------\n");
 				printf("Map (%s) is also updated\n", accept_state_map_name);
 				printf("Key - state: %d\n", accept_map_key.state);
-				printf("Value - flag: %d\n", accept_map_value.flag);
+				printf("Value - flag: %d\n", value_flag);
 				printf("---------------------------------------------------\n");
 			}
 		}
 	}
 	printf("\nTotal entries are inserted: %d\n\n", n_entry);
+	ids_map_key.state = 4;
+	ids_map_key.unit = 'a';
+	if (bpf_map_lookup_elem(ids_map_fd, &ids_map_key, ids_map_values) == 0)
+		for (i_cpu = 0; i_cpu < n_cpu; i_cpu++) {
+			printf("i_cpu: %d, state: %d\n", i_cpu, ids_map_values[i_cpu].state);
+		}
+	else
+		printf("Given Key does not exist\n");
+	accept_map_key.state = 4;
+	if (bpf_map_lookup_elem(accept_map_fd, &accept_map_key, accept_map_values) == 0)
+		for (i_cpu = 0; i_cpu < n_cpu; i_cpu++) {
+			printf("i_cpu: %d, flag: %d\n", i_cpu, accept_map_values[i_cpu].flag);
+		}
+	else
+		printf("Given Key does not exist\n");
 	return 0;
 }
 

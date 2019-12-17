@@ -66,7 +66,7 @@ str2dfa(char **pattern_list, int pattern_list_len, struct str2dfa_kv **result) {
 						(PyString_AsString(PyTuple_GetItem(pKey, 1)))[0];
 					entries[i_entry].value_state =
 						PyInt_AsLong(PyTuple_GetItem(pValue, 0));
-					entries[i_entry].value_is_acceptable =
+					entries[i_entry].value_flag =
 						PyInt_AsLong(PyTuple_GetItem(pValue, 1));
 				}
 				*result = entries;
@@ -144,7 +144,7 @@ str2dfa_fromfile(const char *pattern_file, struct str2dfa_kv **result) {
 						(PyString_AsString(PyTuple_GetItem(pKey, 1)))[0];
 					entries[i_entry].value_state =
 						PyInt_AsLong(PyTuple_GetItem(pValue, 0));
-					entries[i_entry].value_is_acceptable =
+					entries[i_entry].value_flag =
 						PyInt_AsLong(PyTuple_GetItem(pValue, 1));
 				}
 				*result = entries;
