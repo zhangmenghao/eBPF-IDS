@@ -26,20 +26,20 @@
 })
 
 #define IDS_INSPECT_STRIDE 1
-#define IDS_INSPECT_MAP_SIZE 262144
+#define IDS_INSPECT_MAP_SIZE 16777216
 #define IDS_INSPECT_DEPTH 140
-#define ACCEPT_STATE_MAP_SIZE 4096
+#define ACCEPT_STATE_MAP_SIZE 65536
 #define TAIL_CALL_MAP_SIZE 1
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {
-	.type = BPF_MAP_TYPE_PERCPU_HASH,
+	.type = BPF_MAP_TYPE_PERCPU_ARRAY,
 	.key_size = sizeof(struct ids_inspect_map_key),
 	.value_size = sizeof(struct ids_inspect_map_value),
 	.max_entries = IDS_INSPECT_MAP_SIZE,
 };
 
 struct bpf_map_def SEC("maps") accept_state_map = {
-	.type = BPF_MAP_TYPE_PERCPU_HASH,
+	.type = BPF_MAP_TYPE_PERCPU_ARRAY,
 	.key_size = sizeof(struct accept_state_map_key),
 	.value_size = sizeof(struct accept_state_map_value),
 	.max_entries = ACCEPT_STATE_MAP_SIZE,
@@ -84,20 +84,19 @@ static __always_inline int inspect_payload(struct hdr_cursor *nh,void *data_end)
 		// memcpy(&(ids_map_key.unit), ids_unit, IDS_INSPECT_STRIDE);
 		ids_map_key.unit = *ids_unit;
 		ids_map_value = bpf_map_lookup_elem(&ids_inspect_map, &ids_map_key);
-		if (!ids_map_value) {
-			/* Default rule: return to the initial state */
-			ids_map_key.state = 0;
-		} else {
+		if (ids_map_value) {
 			accept_map_key.state = ids_map_value->state;
 			accept_map_value =
 				bpf_map_lookup_elem(&accept_state_map, &accept_map_key);
-			if (!accept_map_value) {
-				/* Not an acceptable state */
-				/* Go to the next state according to DFA */
-				ids_map_key.state = ids_map_value->state;
-			} else {
-				/* An acceptable state, return the hit pattern number ( > 0) */
-				return accept_map_value->flag;
+			if (accept_map_value) {
+				if (accept_map_value->flag > 0) {
+					/* An acceptable state, return the hit pattern number */
+					return accept_map_value->flag;
+				} else {
+					/* Not an acceptable state */
+					/* Go to the next state according to DFA */
+					ids_map_key.state = ids_map_value->state;
+				}
 			}
 		}
 		/* Prepare for next scanning */
