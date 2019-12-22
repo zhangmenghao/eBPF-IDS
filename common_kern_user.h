@@ -25,14 +25,6 @@ struct ids_inspect_map_key {
 
 struct ids_inspect_map_value {
 	ids_inspect_state state;
-};
-
-struct accept_state_map_key {
-	ids_inspect_state state;
-	__u16 padding;
-};
-
-struct accept_state_map_value {
 	accept_state_flag flag;
 };
 

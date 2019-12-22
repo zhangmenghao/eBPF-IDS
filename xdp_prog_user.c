@@ -36,9 +36,9 @@ static const char *__doc__ = "XDP redirect helper\n"
 #define LINE_BUFFER_MAX 160
 
 static const char *ids_inspect_map_name = "ids_inspect_map";
-static const char *accept_state_map_name = "accept_state_map";
 static const char *pattern_file_name = \
-		"./patterns/snort2-community-rules-content.txt";
+		// "./patterns/snort2-community-rules-content.txt";
+		"./patterns/patterns.txt";
 
 static const struct option_wrapper long_options[] = {
 
@@ -67,11 +67,6 @@ static const struct option_wrapper long_options[] = {
 struct ids_inspect_map_update_value {
 	struct ids_inspect_map_value value;
 	__u8 padding[8 - sizeof(struct ids_inspect_map_value)];
-};
-
-struct accept_state_map_update_value {
-	struct accept_state_map_value value;
-	__u8 padding[8 - sizeof(struct accept_state_map_value)];
 };
 
 /*
@@ -239,15 +234,12 @@ static int str2dfa2map(char **pattern_list, int pattern_number, int map_fd) {
 }
 */
 
-static int str2dfa2map_fromfile(const char *pattern_file,
-								int ids_map_fd, int accept_map_fd) {
+static int str2dfa2map_fromfile(const char *pattern_file, int ids_map_fd) {
 	struct str2dfa_kv *map_entries;
 	int i_entry, n_entry;
 	int i_cpu, n_cpu = libbpf_num_possible_cpus();
 	struct ids_inspect_map_key ids_map_key;
 	struct ids_inspect_map_update_value ids_map_values[n_cpu];
-	struct accept_state_map_key accept_map_key;
-	struct accept_state_map_update_value accept_map_values[n_cpu];
 	ids_inspect_state value_state;
 	accept_state_flag value_flag;
 
@@ -264,19 +256,16 @@ static int str2dfa2map_fromfile(const char *pattern_file,
 
 	/* Initial */
 	ids_map_key.padding = 0;
-	accept_map_key.padding = 0;
 	memset(ids_map_values, 0, sizeof(ids_map_values));
-	memset(accept_map_values, 0, sizeof(accept_map_values));
 	/* Convert dfa to map */
 	for (i_entry = 0; i_entry < n_entry; i_entry++) {
 		ids_map_key.state = map_entries[i_entry].key_state;
 		ids_map_key.unit = map_entries[i_entry].key_unit;
-		accept_map_key.state = map_entries[i_entry].value_state;
 		value_state = map_entries[i_entry].value_state;
 		value_flag = map_entries[i_entry].value_flag;
 		for (i_cpu = 0; i_cpu < n_cpu; i_cpu++) {
 			ids_map_values[i_cpu].value.state = value_state;
-			accept_map_values[i_cpu].value.flag = value_flag;
+			ids_map_values[i_cpu].value.flag = value_flag;
 		}
 		if (bpf_map_update_elem(ids_map_fd,
 								&ids_map_key, ids_map_values, 0) < 0) {
@@ -292,23 +281,8 @@ static int str2dfa2map_fromfile(const char *pattern_file,
 			printf(
 				"Key - state: %d, unit: %c\n",
 				ids_map_key.state, ids_map_key.unit);
-			printf("Value - state: %d\n", value_state);
+			printf("Value - state: %d, flag: %d\n", value_state, value_flag);
 			printf("---------------------------------------------------\n");
-		}
-		if (value_flag > 0) {
-			if (bpf_map_update_elem(accept_map_fd,
-								&accept_map_key, accept_map_values, 0) < 0) {
-				fprintf(stderr,
-						"WARN: Failed to update bpf map file: err(%d):%s\n",
-						errno, strerror(errno));
-				return -1;
-			} else {
-				printf("---------------------------------------------------\n");
-				printf("Map (%s) is also updated\n", accept_state_map_name);
-				printf("Key - state: %d\n", accept_map_key.state);
-				printf("Value - flag: %d\n", value_flag);
-				printf("---------------------------------------------------\n");
-			}
 		}
 	}
 	printf("\nTotal entries are inserted: %d\n\n", n_entry);
@@ -324,7 +298,7 @@ const char *pin_basedir = "/sys/fs/bpf";
 int main(int argc, char **argv)
 {
 	int len;
-	int ids_map_fd, accept_map_fd;
+	int ids_map_fd;
 	char pin_dir[PATH_MAX];
 
 	struct config cfg = {
@@ -353,13 +327,9 @@ int main(int argc, char **argv)
 	if (ids_map_fd < 0) {
 		return EXIT_FAIL_BPF;
 	}
-	accept_map_fd = open_bpf_map_file(pin_dir, accept_state_map_name, NULL);
-	if (accept_map_fd < 0) {
-		return EXIT_FAIL_BPF;
-	}
 
 	/* Convert the string to DFA and map */
-	if (str2dfa2map_fromfile(pattern_file_name, ids_map_fd,accept_map_fd) < 0) {
+	if (str2dfa2map_fromfile(pattern_file_name, ids_map_fd) < 0) {
 		fprintf(stderr, "ERR: can't convert the string to DFA/Map\n");
 		return EXIT_FAIL_RE2DFA;
 	}
