@@ -19,3 +19,4 @@ SPEC_FLAGS ?= -I/usr/include/python2.7
 SPEC_LIBS ?= -lpython2.7
 
 include $(COMMON_DIR)/common.mk
+LIBS += -lpthread

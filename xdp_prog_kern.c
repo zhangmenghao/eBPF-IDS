@@ -44,6 +44,13 @@ struct bpf_map_def SEC("maps") tail_call_map = {
 	.max_entries = TAIL_CALL_MAP_SIZE,
 };
 
+struct bpf_map_def SEC("maps") xsks_map = {
+	.type = BPF_MAP_TYPE_XSKMAP,
+	.key_size = sizeof(int),
+	.value_size = sizeof(int),
+	.max_entries = 64,  /* Assume netdev has no more than 64 queues */
+};
+
 struct meta_info {
 	__u8 unit;
 	__u8 tens;
@@ -93,6 +100,7 @@ int xdp_ids_func(struct xdp_md *ctx)
 {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
+    __u32 rx_queue_index = ctx->rx_queue_index;
 	struct meta_info *meta;
 	struct hdr_cursor nh;
 	int eth_type, ip_type;
@@ -101,6 +109,7 @@ int xdp_ids_func(struct xdp_md *ctx)
 	struct ipv6hdr *ip6h;
 	struct udphdr *udph;
 	struct tcphdr *tcph;
+	int send_to_userspace = 1;
 
 	/* Default action XDP_PASS, imply everything we couldn't parse, or that
 	 * we don't want to deal with, we just pass up the stack and let the
@@ -151,6 +160,15 @@ int xdp_ids_func(struct xdp_md *ctx)
 		}
 	} else {
 		goto out;
+	}
+
+	if (send_to_userspace) {
+		/* A set entry here means that the correspnding queue_id
+		 * has an active AF_XDP socket bound to it. */
+		if (bpf_map_lookup_elem(&xsks_map, &rx_queue_index)) {
+			action = bpf_redirect_map(&xsks_map, rx_queue_index, 0);
+			goto out;
+		}
 	}
 
 	/* Only packet with valid TCP/UDP header will reach here */
