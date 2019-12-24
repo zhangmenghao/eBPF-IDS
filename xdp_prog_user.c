@@ -47,12 +47,14 @@ static const char *__doc__ = "An In-Kernel IDS based on XDP\n";
 #include "common_kern_user.h"
 
 #define LINE_BUFFER_MAX 160
+#define IDS_INSPECT_ARRAY_SIZE 16777216
 
 static const char *ids_inspect_map_name = "ids_inspect_map";
 static const char *xsks_map_name = "xsks_map";
 static const char *pattern_file_name = \
 		// "./patterns/snort2-community-rules-content.txt";
 		"./patterns/patterns.txt";
+static struct ids_inspect_map_value ids_inspect_array[IDS_INSPECT_ARRAY_SIZE];
 
 static const struct option_wrapper long_options[] = {
 
@@ -142,7 +144,7 @@ struct ids_inspect_map_update_value {
  *                 printf("---------------------------------------------------\n");
  *             }
  *             printf("Insert match (src_state: %d, chars: %d) and action (dst_state: %d)\n",
- *					  map_key.state, map_key.unit, map_value.state);
+ *                       map_key.state, map_key.unit, map_value.state);
  *         }
  *     }
  * 
@@ -200,7 +202,7 @@ struct ids_inspect_map_update_value {
  * };
  * 
  * static int str2dfa2map(char **pattern_list, int pattern_number, int map_fd) {
- *     struct str2dfa_kv *map_entries;
+ *     struct dfa_entry *map_entries;
  *     int i_entry, n_entry;
  *     struct ids_inspect_map_key map_key;
  *     struct ids_inspect_map_value map_value;
@@ -246,29 +248,24 @@ struct ids_inspect_map_update_value {
  * }
  */
 
-static int str2dfa2map_fromfile(const char *pattern_file, int ids_map_fd) {
-	struct str2dfa_kv *map_entries;
-	int i_entry, n_entry;
+static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
+{
+	struct dfa_entry *map_entries = dfa->entries;
+	uint32_t i_entry, n_entry = dfa->entry_number;
 	int i_cpu, n_cpu = libbpf_num_possible_cpus();
 	struct ids_inspect_map_key ids_map_key;
 	struct ids_inspect_map_update_value ids_map_values[n_cpu];
 	ids_inspect_state value_state;
 	accept_state_flag value_flag;
+	uint32_t array_index;
 
 	printf("Number of CPUs: %d\n", n_cpu);
-
-	/* Convert string to DFA first */
-	n_entry = str2dfa_fromfile(pattern_file, &map_entries);
-	if (n_entry < 0) {
-		fprintf(stderr, "ERR: can't convert the String to DFA/Map\n");
-		return -1;
-	} else {
-		printf("Totol %d entries generated from pattern list\n", n_entry);
-	}
 
 	/* Initial */
 	ids_map_key.padding = 0;
 	memset(ids_map_values, 0, sizeof(ids_map_values));
+	memset(ids_inspect_array, 0, sizeof(ids_inspect_array));
+
 	/* Convert dfa to map */
 	for (i_entry = 0; i_entry < n_entry; i_entry++) {
 		ids_map_key.state = map_entries[i_entry].key_state;
@@ -296,8 +293,37 @@ static int str2dfa2map_fromfile(const char *pattern_file, int ids_map_fd) {
 			printf("Value - state: %d, flag: %d\n", value_state, value_flag);
 			printf("---------------------------------------------------\n");
 		}
+		array_index = *(uint32_t *)&ids_map_key;
+		ids_inspect_array[array_index].state = map_entries[i_entry].value_state;
+		ids_inspect_array[array_index].flag = map_entries[i_entry].value_flag;
 	}
 	printf("\nTotal entries are inserted: %d\n\n", n_entry);
+
+	return 0;
+}
+
+static __always_inline int inspect_payload(void *payload, uint16_t payload_len)
+{
+	ids_inspect_unit *ids_unit = (ids_inspect_unit *)payload;
+	struct ids_inspect_map_key ids_map_key;
+	struct ids_inspect_map_value *ids_map_value;
+	uint32_t array_index;
+	int i_unit;
+
+	ids_map_key.state = 0;
+	ids_map_key.padding = 0;
+
+	for (i_unit = 0; i_unit < payload_len; i_unit++) {
+		ids_map_key.unit = *ids_unit;
+		array_index = *(uint32_t *)&ids_map_key;
+		ids_map_value = &ids_inspect_array[array_index];
+		if (ids_map_value->flag > 0) {
+			return ids_map_value->flag;
+		}
+		ids_map_key.state = ids_map_value->state;
+		ids_unit += 1;
+	}
+
 	return 0;
 }
 
@@ -324,10 +350,9 @@ static void *stats_poll(void *arg)
 static bool proc_pkt(struct xsk_socket_info *xsk, uint64_t addr, uint32_t len)
 {
 	int ret, ip_type;
-	uint32_t hdr_len = 0;
+	uint32_t ids_state, hdr_len = 0;
 	uint8_t *pkt = xsk_umem__get_data(xsk->umem->buffer, addr);
 	struct ethhdr *eth = (struct ethhdr *) pkt;
-	ids_inspect_unit *ids_unit;
 	uint32_t tx_idx = 0;
 
 
@@ -368,7 +393,15 @@ static bool proc_pkt(struct xsk_socket_info *xsk, uint64_t addr, uint32_t len)
 		return false;
 	}
 
-	ids_unit = (ids_inspect_unit *)(pkt + hdr_len);
+	ids_state = inspect_payload((void *)(pkt + hdr_len), len - hdr_len);
+
+	if (ids_state > 0) {
+		printf("---------------------------------------------------\n");
+		printf("The %dth pattern is triggered\n", ids_state);
+		printf("---------------------------------------------------\n\n");
+		/* Drop the packet */
+		return false;
+	}
 
 sendpkt:
 	/* Here we sent the packet out of the receive port. Note that
@@ -428,6 +461,7 @@ int main(int argc, char **argv)
 	int ret, len;
 	int ids_map_fd, xsks_map_fd;
 	char pin_dir[PATH_MAX];
+	struct dfa_struct dfa;
 	struct xsk_umem_info *umem;
 	struct xsk_socket_info *xsk_socket;
 	pthread_t stats_poll_thread;
@@ -467,8 +501,14 @@ int main(int argc, char **argv)
 	}
 
 	/* Convert the string to DFA and map */
-	if (str2dfa2map_fromfile(pattern_file_name, ids_map_fd) < 0) {
-		fprintf(stderr, "ERR: can't convert the string to DFA/Map\n");
+	if (str2dfa_fromfile(pattern_file_name, &dfa) < 0) {
+		fprintf(stderr, "ERR: can't convert the string to DFA\n");
+		return EXIT_FAIL_RE2DFA;
+	} else {
+		printf("Totol %d entries loaded from pattern file\n", dfa.entry_number);
+	}
+	if (dfa2map(ids_map_fd, &dfa) < 0) {
+		fprintf(stderr, "ERR: can't convert the DFA to Map\n");
 		return EXIT_FAIL_RE2DFA;
 	}
 
@@ -478,11 +518,10 @@ int main(int argc, char **argv)
 		return EXIT_FAIL_BPF;
 	}
 
-    printf("Start to receive and process packets from the data plane...\n\n");
+	printf("Start to receive and process packets from the data plane...\n\n");
 	/* Start thread to do statistics display */
 	if (verbose) {
-		ret = pthread_create(&stats_poll_thread, NULL, stats_poll,
-				     xsk_socket);
+		ret = pthread_create(&stats_poll_thread, NULL, stats_poll, xsk_socket);
 		if (ret) {
 			fprintf(stderr, "ERROR: Failed creating statistics thread "
 				"\"%s\"\n", strerror(errno));

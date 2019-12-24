@@ -8,14 +8,19 @@
 #ifndef _STR2DFA_H
 #define _STR2DFA_H
 
-struct str2dfa_kv {
-	long key_state;
-	char key_unit;
-	long value_state;
-	long value_flag;
+struct dfa_struct {
+	uint32_t entry_number;
+	struct dfa_entry *entries;
 };
 
-int str2dfa(char **, int, struct str2dfa_kv **);
-int str2dfa_fromfile(const char *, struct str2dfa_kv **result);
+struct dfa_entry {
+	uint16_t key_state;
+	uint8_t key_unit;
+	uint16_t value_state;
+	uint16_t value_flag;
+};
+
+int str2dfa(char **, int, struct dfa_struct *);
+int str2dfa_fromfile(const char *, struct dfa_struct *result);
 
 #endif

@@ -100,7 +100,7 @@ int xdp_ids_func(struct xdp_md *ctx)
 {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
-    __u32 rx_queue_index = ctx->rx_queue_index;
+	__u32 rx_queue_index = ctx->rx_queue_index;
 	struct meta_info *meta;
 	struct hdr_cursor nh;
 	int eth_type, ip_type;
@@ -165,10 +165,8 @@ int xdp_ids_func(struct xdp_md *ctx)
 	if (send_to_userspace) {
 		/* A set entry here means that the correspnding queue_id
 		 * has an active AF_XDP socket bound to it. */
-		if (bpf_map_lookup_elem(&xsks_map, &rx_queue_index)) {
-			action = bpf_redirect_map(&xsks_map, rx_queue_index, 0);
-			goto out;
-		}
+		action = bpf_redirect_map(&xsks_map, rx_queue_index, 0);
+		goto out;
 	}
 
 	/* Only packet with valid TCP/UDP header will reach here */

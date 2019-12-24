@@ -10,7 +10,7 @@
 #include "str2dfa.h"
 
 int
-str2dfa(char **pattern_list, int pattern_list_len, struct str2dfa_kv **result) {
+str2dfa(char **pattern_list, int pattern_list_len, struct dfa_struct *result) {
 	PyObject *pName, *pModule, *pFunc, *pArgs, *pReturn;
 	int i_pattern, i_entry, n_entry;
 
@@ -54,8 +54,8 @@ str2dfa(char **pattern_list, int pattern_list_len, struct str2dfa_kv **result) {
 			if (pReturn != NULL) {
 				PyObject *pKey, *pValue, *pEntry;
 				n_entry = PyList_Size(pReturn);
-				struct str2dfa_kv *entries = (struct str2dfa_kv *)
-					malloc(sizeof(struct str2dfa_kv) * n_entry);
+				struct dfa_entry *entries = (struct dfa_entry *)
+					malloc(sizeof(struct dfa_entry) * n_entry);
 				for (i_entry = 0; i_entry < n_entry; i_entry++) {
 					pEntry = PyList_GetItem(pReturn, i_entry);
 					pKey = PyTuple_GetItem(pEntry, 0);
@@ -69,7 +69,8 @@ str2dfa(char **pattern_list, int pattern_list_len, struct str2dfa_kv **result) {
 					entries[i_entry].value_flag =
 						PyInt_AsLong(PyTuple_GetItem(pValue, 1));
 				}
-				*result = entries;
+				result->entry_number = n_entry;
+				result->entries = entries;
 				Py_DECREF(pKey);
 				Py_DECREF(pValue);
 				Py_DECREF(pEntry);
@@ -94,11 +95,11 @@ str2dfa(char **pattern_list, int pattern_list_len, struct str2dfa_kv **result) {
 		return -1;
 	}
 	Py_Finalize();
-	return n_entry;
+	return 0;
 }
 
 int
-str2dfa_fromfile(const char *pattern_file, struct str2dfa_kv **result) {
+str2dfa_fromfile(const char *pattern_file, struct dfa_struct *result) {
 	PyObject *pName, *pModule, *pFunc, *pArgs, *pReturn;
 	int i_pattern, i_entry, n_entry;
 
@@ -132,8 +133,8 @@ str2dfa_fromfile(const char *pattern_file, struct str2dfa_kv **result) {
 			if (pReturn != NULL) {
 				PyObject *pKey, *pValue, *pEntry;
 				n_entry = PyList_Size(pReturn);
-				struct str2dfa_kv *entries = (struct str2dfa_kv *)
-					malloc(sizeof(struct str2dfa_kv) * n_entry);
+				struct dfa_entry *entries = (struct dfa_entry *)
+					malloc(sizeof(struct dfa_entry) * n_entry);
 				for (i_entry = 0; i_entry < n_entry; i_entry++) {
 					pEntry = PyList_GetItem(pReturn, i_entry);
 					pKey = PyTuple_GetItem(pEntry, 0);
@@ -147,7 +148,8 @@ str2dfa_fromfile(const char *pattern_file, struct str2dfa_kv **result) {
 					entries[i_entry].value_flag =
 						PyInt_AsLong(PyTuple_GetItem(pValue, 1));
 				}
-				*result = entries;
+				result->entry_number = n_entry;
+				result->entries = entries;
 				Py_DECREF(pKey);
 				Py_DECREF(pValue);
 				Py_DECREF(pEntry);
@@ -172,5 +174,5 @@ str2dfa_fromfile(const char *pattern_file, struct str2dfa_kv **result) {
 		return -1;
 	}
 	Py_Finalize();
-	return n_entry;
+	return 0;
 }
