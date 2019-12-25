@@ -6,18 +6,24 @@ import ahocorasick
 class DFAMatchEntriesGenerator():
     def __init__(self, pattern_list, stride=1, table_id=0):
         # Init and configure the automaton
+        pattern_number = 0
         self.stride = stride
         self.table_id = table_id
         self.automaton = ahocorasick.Automaton(ahocorasick.STORE_LENGTH)
         if type(pattern_list) == list:
             for pattern in pattern_list:
                 self.automaton.add_word(pattern)
+                pattern_number += 1
+            print("\nTotal %d patterns loaded\n" % pattern_number)
         elif type(pattern_list) == str:
             pattern_file = open(pattern_list, 'r')
             for pattern in pattern_file.readlines():
                 pattern = pattern[:-1]
                 print("Get pattern of length %d: %s" % (len(pattern), pattern))
                 self.automaton.add_word(pattern)
+                pattern_number += 1
+            print("\nTotal %d patterns loaded from file %s\n" % \
+                  (pattern_number, pattern_list))
         self.automaton.make_automaton()
         # Gegerate dfa descriptor according to the automaton
         self.dfa = self.generate_dfa(self.automaton.dump())

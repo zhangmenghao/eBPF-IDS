@@ -73,6 +73,9 @@ static const struct option_wrapper long_options[] = {
 	{{"quiet",       no_argument,		NULL, 'q' },
 	 "Quiet mode (no output)"},
 
+	{{"vv",          no_argument,		NULL, 'v' },
+	 "More verbose and detailed output"},
+
 	{{0, 0, NULL,  0 }, NULL, false}
 };
 
@@ -259,7 +262,7 @@ static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
 	accept_state_flag value_flag;
 	uint32_t array_index;
 
-	printf("Number of CPUs: %d\n", n_cpu);
+	printf("Number of CPUs: %d\n\n", n_cpu);
 
 	/* Initial */
 	ids_map_key.padding = 0;
@@ -283,23 +286,44 @@ static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
 				errno, strerror(errno));
 			return -1;
 		} else {
-			printf("---------------------------------------------------\n");
-			printf(
-				"New element is added in to map (%s)\n",
-				ids_inspect_map_name);
-			printf(
-				"Key - state: %d, unit: %c\n",
-				ids_map_key.state, ids_map_key.unit);
-			printf("Value - state: %d, flag: %d\n", value_state, value_flag);
-			printf("---------------------------------------------------\n");
+			if (verbose > 1) {
+				printf("---------------------------------------------------\n");
+				printf("New element is added in to map (%s)\n",
+						ids_inspect_map_name);
+				printf("Key - state: %d, unit: %c\n",
+						ids_map_key.state, ids_map_key.unit);
+				printf("Value - state: %d, flag: %d\n",
+						value_state, value_flag);
+				printf("---------------------------------------------------\n");
+			}
 		}
 		array_index = *(uint32_t *)&ids_map_key;
 		ids_inspect_array[array_index].state = map_entries[i_entry].value_state;
 		ids_inspect_array[array_index].flag = map_entries[i_entry].value_flag;
 	}
-	printf("\nTotal entries are inserted: %d\n\n", n_entry);
+	printf("Total %d entries are inserted\n\n", n_entry);
 
 	return 0;
+}
+
+static void *stats_poll(void *arg)
+{
+	unsigned int interval = 2;
+	struct xsk_socket_info *xsk = arg;
+	static struct stats_record previous_stats = { 0 };
+
+	previous_stats.timestamp = xsk_gettime();
+
+	/* Trick to pretty printf with thousands separators use %' */
+	setlocale(LC_NUMERIC, "en_US");
+
+	while (!global_exit) {
+		sleep(interval);
+		xsk->stats.timestamp = xsk_gettime();
+		stats_print(&xsk->stats, &previous_stats);
+		previous_stats = xsk->stats;
+	}
+	return NULL;
 }
 
 static __always_inline int inspect_payload(void *payload, uint16_t payload_len)
@@ -325,26 +349,6 @@ static __always_inline int inspect_payload(void *payload, uint16_t payload_len)
 	}
 
 	return 0;
-}
-
-static void *stats_poll(void *arg)
-{
-	unsigned int interval = 2;
-	struct xsk_socket_info *xsk = arg;
-	static struct stats_record previous_stats = { 0 };
-
-	previous_stats.timestamp = xsk_gettime();
-
-	/* Trick to pretty printf with thousands separators use %' */
-	setlocale(LC_NUMERIC, "en_US");
-
-	while (!global_exit) {
-		sleep(interval);
-		xsk->stats.timestamp = xsk_gettime();
-		stats_print(&xsk->stats, &previous_stats);
-		previous_stats = xsk->stats;
-	}
-	return NULL;
 }
 
 static bool proc_pkt(struct xsk_socket_info *xsk, uint64_t addr, uint32_t len)
@@ -396,9 +400,11 @@ static bool proc_pkt(struct xsk_socket_info *xsk, uint64_t addr, uint32_t len)
 	ids_state = inspect_payload((void *)(pkt + hdr_len), len - hdr_len);
 
 	if (ids_state > 0) {
-		printf("---------------------------------------------------\n");
-		printf("The %dth pattern is triggered\n", ids_state);
-		printf("---------------------------------------------------\n\n");
+		if (verbose > 1) {
+			printf("---------------------------------------------------\n");
+			printf("The %dth pattern is triggered\n", ids_state);
+			printf("---------------------------------------------------\n\n");
+		}
 		/* Drop the packet */
 		return false;
 	}
@@ -488,7 +494,7 @@ int main(int argc, char **argv)
 		return EXIT_FAIL_OPTION;
 	}
 
-	printf("map dir: %s\n", pin_dir);
+	printf("\nmap dir: %s\n\n", pin_dir);
 
 	/* Open the maps corresponding to the cfg.ifname interface */
 	ids_map_fd = open_bpf_map_file(pin_dir, ids_inspect_map_name, NULL);
@@ -504,8 +510,6 @@ int main(int argc, char **argv)
 	if (str2dfa_fromfile(pattern_file_name, &dfa) < 0) {
 		fprintf(stderr, "ERR: can't convert the string to DFA\n");
 		return EXIT_FAIL_RE2DFA;
-	} else {
-		printf("Totol %d entries loaded from pattern file\n", dfa.entry_number);
 	}
 	if (dfa2map(ids_map_fd, &dfa) < 0) {
 		fprintf(stderr, "ERR: can't convert the DFA to Map\n");
