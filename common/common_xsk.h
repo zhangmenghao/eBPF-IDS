@@ -40,11 +40,9 @@ struct xsk_socket_info {
 typedef bool (*xsk_pkt_func)(struct xsk_socket_info*, uint64_t, uint32_t);
 
 uint64_t xsk_gettime(void);
-void stats_print(struct stats_record *stats_rec,
-				 struct stats_record *stats_prev);
-void handle_receive_packets(struct xsk_socket_info *xsk, xsk_pkt_func proc_pkt);
-void af_xdp_init(struct config *cfg, int xsks_map_fd,
-					   struct xsk_umem_info **umem_result,
-					   struct xsk_socket_info **xsk_socket_result);
+void stats_print(struct stats_record *, struct stats_record *);
+void handle_receive_packets(struct xsk_socket_info *, xsk_pkt_func);
+int af_xdp_init(struct config *, int,
+				struct xsk_umem_info **, struct xsk_socket_info **);
 
 #endif

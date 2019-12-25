@@ -64,8 +64,14 @@ static const struct option_wrapper long_options[] = {
 	{{"dev",         required_argument,	NULL, 'd' },
 	 "Operate on device <ifname>", "<ifname>", true},
 
-	{{"queue",	 required_argument,	NULL, 'Q' },
-	 "Configure interface receive queue for AF_XDP, default=0"},
+	{{"copy",        no_argument,		NULL, 'c' },
+	 "Force copy mode"},
+
+	{{"zero-copy",	 no_argument,		NULL, 'z' },
+	 "Force zero-copy mode"},
+
+	{{"queue",       required_argument,	NULL, 'Q' },
+	 "Configure the number of interface receive queues for AF_XDP, default=0"},
 
 	{{"poll-mode",	 no_argument,		NULL, 'p' },
 	 "Use the poll() API waiting for packets to arrive"},
@@ -85,6 +91,11 @@ static bool global_exit;
 struct ids_inspect_map_update_value {
 	struct ids_inspect_map_value value;
 	uint8_t padding[8 - sizeof(struct ids_inspect_map_value)];
+};
+
+struct stats_poll_arg {
+	struct xsk_socket_info **xsk_sockets;
+	int xsk_if_queue;
 };
 
 /*
@@ -309,7 +320,9 @@ static int dfa2map(int ids_map_fd, struct dfa_struct *dfa)
 static void *stats_poll(void *arg)
 {
 	unsigned int interval = 2;
-	struct xsk_socket_info *xsk = arg;
+	struct stats_poll_arg *stats_arg = arg;
+	struct xsk_socket_info **xsk_sockets = stats_arg->xsk_sockets;
+	int i_queue, n_queue = stats_arg->xsk_if_queue;
 	static struct stats_record previous_stats = { 0 };
 
 	previous_stats.timestamp = xsk_gettime();
@@ -319,9 +332,16 @@ static void *stats_poll(void *arg)
 
 	while (!global_exit) {
 		sleep(interval);
-		xsk->stats.timestamp = xsk_gettime();
-		stats_print(&xsk->stats, &previous_stats);
-		previous_stats = xsk->stats;
+		struct stats_record current_stats = { 0 };
+		current_stats.timestamp = xsk_gettime();
+		for (i_queue = 0; i_queue < n_queue; i_queue++) {
+			current_stats.rx_packets += xsk_sockets[i_queue]->stats.rx_packets;
+			current_stats.rx_bytes += xsk_sockets[i_queue]->stats.rx_bytes;
+			current_stats.tx_packets += xsk_sockets[i_queue]->stats.tx_packets;
+			current_stats.tx_bytes += xsk_sockets[i_queue]->stats.tx_bytes;
+		}
+		stats_print(&current_stats, &previous_stats);
+		previous_stats = current_stats;
 	}
 	return NULL;
 }
@@ -431,22 +451,33 @@ sendpkt:
 }
 
 static void rx_and_process(struct config *cfg,
-						   struct xsk_socket_info *xsk_socket)
+						   struct xsk_socket_info **xsk_sockets)
 {
-	struct pollfd fds[2];
-	int ret, nfds = 1;
+	int ret, i_queue, n_queue = cfg->xsk_if_queue;
+	struct pollfd fds[n_queue];
 
 	memset(fds, 0, sizeof(fds));
-	fds[0].fd = xsk_socket__fd(xsk_socket->xsk);
-	fds[0].events = POLLIN;
+	for (i_queue = 0; i_queue < n_queue; i_queue++) {
+		fds[i_queue].fd = xsk_socket__fd(xsk_sockets[i_queue]->xsk);
+		fds[i_queue].events = POLLIN;
+	}
 
 	while(!global_exit) {
 		if (cfg->xsk_poll_mode) {
-			ret = poll(fds, nfds, -1);
-			if (ret <= 0 || ret > 1)
+			ret = poll(fds, n_queue, 0);
+			if (ret <= 0) {
 				continue;
+			}
+			for (i_queue = 0; i_queue < n_queue; i_queue++) {
+				if (fds[i_queue].revents & POLLIN) {
+					handle_receive_packets(xsk_sockets[i_queue], proc_pkt);
+				}
+			}
+		} else {
+			for (i_queue = 0; i_queue < n_queue; i_queue++) {
+				handle_receive_packets(xsk_sockets[i_queue], proc_pkt);
+			}
 		}
-		handle_receive_packets(xsk_socket, proc_pkt);
 	}
 }
 
@@ -468,9 +499,10 @@ int main(int argc, char **argv)
 	int ids_map_fd, xsks_map_fd;
 	char pin_dir[PATH_MAX];
 	struct dfa_struct dfa;
-	struct xsk_umem_info *umem;
-	struct xsk_socket_info *xsk_socket;
+	struct xsk_umem_info **umems;
+	struct xsk_socket_info **xsk_sockets;
 	pthread_t stats_poll_thread;
+	int i_queue;
 
 	struct config cfg = {
 		.ifindex = -1,
@@ -516,28 +548,43 @@ int main(int argc, char **argv)
 		return EXIT_FAIL_RE2DFA;
 	}
 
-	af_xdp_init(&cfg, xsks_map_fd, &umem, &xsk_socket);
-	if (!umem || !xsk_socket) {
-		fprintf(stderr, "ERR: can't initialize for AF_XDP\n");
+	/* Configure and initialize AF_XDP sockets */
+	umems = (struct xsk_umem_info **)
+			malloc(sizeof(struct xsk_umem_info *) * cfg.xsk_if_queue);
+	xsk_sockets = (struct xsk_socket_info **)
+				  malloc(sizeof(struct xsk_socket_info *) * cfg.xsk_if_queue);
+	if (!umems || !xsk_sockets) {
+		fprintf(stderr, "ERR: can't initialize umems/xsk_sockets for AF_XDP\n");
 		return EXIT_FAIL_BPF;
 	}
+	ret = af_xdp_init(&cfg, xsks_map_fd, umems, xsk_sockets);
+	if (ret != 0) {
+		fprintf(stderr, "ERR: can't initialize for AF_XDP\n");
+		return ret;
+	}
 
-	printf("Start to receive and process packets from the data plane...\n\n");
 	/* Start thread to do statistics display */
 	if (verbose) {
-		ret = pthread_create(&stats_poll_thread, NULL, stats_poll, xsk_socket);
+		struct stats_poll_arg arg;
+		arg.xsk_sockets = xsk_sockets;
+		arg.xsk_if_queue = cfg.xsk_if_queue;
+		ret = pthread_create(&stats_poll_thread, NULL, stats_poll, &arg);
 		if (ret) {
 			fprintf(stderr, "ERROR: Failed creating statistics thread "
 				"\"%s\"\n", strerror(errno));
-			exit(EXIT_FAILURE);
+			return EXIT_FAILURE;
 		}
 	}
+
 	/* Receive and count packets than drop them */
-	rx_and_process(&cfg, xsk_socket);
+	printf("Start to receive and process packets from the data plane...\n\n");
+	rx_and_process(&cfg, xsk_sockets);
 
 	/* Cleanup */
-	xsk_socket__delete(xsk_socket->xsk);
-	xsk_umem__delete(umem->umem);
+	for (i_queue = 0; i_queue < cfg.xsk_if_queue; i_queue++) {
+		xsk_socket__delete(xsk_sockets[i_queue]->xsk);
+		xsk_umem__delete(umems[i_queue]->umem);
+	}
 	// xdp_link_detach(cfg.ifindex, cfg.xdp_flags, 0);
 
 	return EXIT_OK;

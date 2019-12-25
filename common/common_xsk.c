@@ -55,8 +55,8 @@ static uint64_t xsk_umem_free_frames(struct xsk_socket_info *xsk)
 	return xsk->umem_frame_free;
 }
 
-static struct xsk_socket_info *xsk_configure_socket(struct config *cfg,
-						    struct xsk_umem_info *umem)
+static struct xsk_socket_info *xsk_configure_socket(
+				struct config *cfg, int if_queue_id, struct xsk_umem_info *umem)
 {
 	struct xsk_socket_config xsk_cfg;
 	struct xsk_socket_info *xsk_info;
@@ -76,7 +76,7 @@ static struct xsk_socket_info *xsk_configure_socket(struct config *cfg,
 	xsk_cfg.xdp_flags = cfg->xdp_flags;
 	xsk_cfg.bind_flags = cfg->xsk_bind_flags;
 	ret = xsk_socket__create(&xsk_info->xsk, cfg->ifname,
-				 cfg->xsk_if_queue, umem->umem, &xsk_info->rx,
+				 if_queue_id, umem->umem, &xsk_info->rx,
 				 &xsk_info->tx, &xsk_cfg);
 
 	if (ret)
@@ -255,41 +255,48 @@ void handle_receive_packets(struct xsk_socket_info *xsk, xsk_pkt_func proc_pkt)
 	complete_tx(xsk);
 }
 
-void af_xdp_init(struct config *cfg, int xsks_map_fd,
-					   struct xsk_umem_info **umem_result,
-					   struct xsk_socket_info **xsk_socket_result)
+int af_xdp_init(struct config *cfg, int xsks_map_fd,
+				 struct xsk_umem_info **umems,
+				 struct xsk_socket_info **xsk_sockets)
 {
 	uint64_t packet_buffer_size;
 	void *packet_buffer;
 	struct xsk_umem_info *umem;
 	struct xsk_socket_info *xsk_socket;
+	int i_queue, n_queue = cfg->xsk_if_queue;
 
-	/* Allocate memory for NUM_FRAMES of the default XDP frame size */
 	packet_buffer_size = NUM_FRAMES * FRAME_SIZE;
-	if (posix_memalign(&packet_buffer,
-						getpagesize(), /* PAGE_SIZE aligned */
-						packet_buffer_size)) {
-		fprintf(stderr, "ERROR: Can't allocate buffer memory \"%s\"\n",
-			strerror(errno));
-		exit(EXIT_FAILURE);
+
+	for (i_queue = 0; i_queue < n_queue; i_queue++) {
+		/* Allocate memory for NUM_FRAMES of the default XDP frame size */
+		if (posix_memalign(&packet_buffer,
+							getpagesize(), /* PAGE_SIZE aligned */
+							packet_buffer_size)) {
+			fprintf(stderr, "ERROR: Can't allocate buffer memory \"%s\"\n",
+				strerror(errno));
+			return EXIT_FAILURE;
+		}
+
+		/* Initialize shared packet_buffer for umem usage */
+		umem = configure_xsk_umem(packet_buffer, packet_buffer_size);
+		if (umem == NULL) {
+			fprintf(stderr, "ERROR: Can't create umem \"%s\"\n",
+				strerror(errno));
+			return EXIT_FAILURE;
+		}
+
+		/* Open and configure the AF_XDP (xsk) socket */
+		xsk_socket = xsk_configure_socket(cfg, i_queue, umem);
+		if (xsk_socket == NULL) {
+			fprintf(stderr, "ERROR: Can't setup AF_XDP socket \"%s\"\n",
+				strerror(errno));
+			return EXIT_FAILURE;
+		}
+
+		umems[i_queue] = umem;
+		xsk_sockets[i_queue] = xsk_socket;
+
 	}
 
-	/* Initialize shared packet_buffer for umem usage */
-	umem = configure_xsk_umem(packet_buffer, packet_buffer_size);
-	if (umem == NULL) {
-		fprintf(stderr, "ERROR: Can't create umem \"%s\"\n",
-			strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-
-	/* Open and configure the AF_XDP (xsk) socket */
-	xsk_socket = xsk_configure_socket(cfg, umem);
-	if (xsk_socket == NULL) {
-		fprintf(stderr, "ERROR: Can't setup AF_XDP socket \"%s\"\n",
-			strerror(errno));
-		exit(EXIT_FAILURE);
-	}
-
-	*umem_result = umem;
-	*xsk_socket_result = xsk_socket;
+	return 0;
 }
