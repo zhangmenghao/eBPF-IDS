@@ -548,6 +548,11 @@ int main(int argc, char **argv)
 		return EXIT_FAIL_RE2DFA;
 	}
 
+	/* If AF_XDP mode is disabled, no need to execute the next codes */
+	if (cfg.xsk_if_queue <= 0) {
+		return EXIT_OK;
+	}
+
 	/* Configure and initialize AF_XDP sockets */
 	umems = (struct xsk_umem_info **)
 			malloc(sizeof(struct xsk_umem_info *) * cfg.xsk_if_queue);

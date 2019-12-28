@@ -102,13 +102,6 @@ int xdp_ids_func(struct xdp_md *ctx)
 	void *data = (void *)(long)ctx->data;
 	__u32 rx_queue_index = ctx->rx_queue_index;
 	struct meta_info *meta;
-	struct hdr_cursor nh;
-	int eth_type, ip_type;
-	struct ethhdr *eth;
-	struct iphdr *iph;
-	struct ipv6hdr *ip6h;
-	struct udphdr *udph;
-	struct tcphdr *tcph;
 	int send_to_userspace = 1;
 
 	/* Default action XDP_PASS, imply everything we couldn't parse, or that
@@ -116,6 +109,13 @@ int xdp_ids_func(struct xdp_md *ctx)
 	 * kernel deal with it.
 	 */
 	__u32 action = XDP_PASS; /* Default action */
+
+	if (send_to_userspace) {
+		/* A set entry here means that the correspnding queue_id
+		 * has an active AF_XDP socket bound to it. */
+		action = bpf_redirect_map(&xsks_map, rx_queue_index, 0);
+		goto out;
+	}
 
 	/* Prepare space for metadata */
 	if (bpf_xdp_adjust_meta(ctx, -(int)sizeof(*meta)) < 0) {
@@ -128,7 +128,6 @@ int xdp_ids_func(struct xdp_md *ctx)
 	 */
 	data = (void *)(long)ctx->data;
 	data_end = (void *)(long)ctx->data_end;
-	nh.pos = data;
 
 	/* Check the validity */
 	meta = (void *)(long)ctx->data_meta;
@@ -138,6 +137,15 @@ int xdp_ids_func(struct xdp_md *ctx)
 	}
 
 	/* Parse packet */
+	struct hdr_cursor nh;
+	int eth_type, ip_type;
+	struct ethhdr *eth;
+	struct iphdr *iph;
+	struct ipv6hdr *ip6h;
+	struct udphdr *udph;
+	struct tcphdr *tcph;
+
+	nh.pos = data;
 	eth_type = parse_ethhdr(&nh, data_end, &eth);
 
 	if (eth_type == bpf_htons(ETH_P_IP)) {
@@ -159,13 +167,6 @@ int xdp_ids_func(struct xdp_md *ctx)
 			goto out;
 		}
 	} else {
-		goto out;
-	}
-
-	if (send_to_userspace) {
-		/* A set entry here means that the correspnding queue_id
-		 * has an active AF_XDP socket bound to it. */
-		action = bpf_redirect_map(&xsks_map, rx_queue_index, 0);
 		goto out;
 	}
 
