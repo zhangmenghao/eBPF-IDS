@@ -1,4 +1,5 @@
 # eBPF-IDS
+This is the repository for Project eBPF-IDS, which aims to provide pattern matching with eBPF. It can filter malicious packets before they arrive at linux kernel, thus providing significant performance boost. 
 
 ## Create an alias for testenv.sh
 `eval $(./testenv/testenv.sh alias)`
