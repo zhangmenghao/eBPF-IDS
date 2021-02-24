@@ -27,7 +27,7 @@
 
 #define IDS_INSPECT_STRIDE 1
 #define IDS_INSPECT_MAP_SIZE 16777216
-#define IDS_INSPECT_DEPTH 140
+#define IDS_INSPECT_DEPTH 150
 #define TAIL_CALL_MAP_SIZE 1
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {
@@ -50,7 +50,8 @@ struct meta_info {
 	__u16 raw;
 } __attribute__((aligned(4)));
 
-static __always_inline int inspect_payload(struct hdr_cursor *nh,void *data_end)
+/*
+static __always_inline int inspect_payload(struct hdr_cursor *nh,void *data_end, ids_inspect_state init_state)
 {
 	// struct ids_inspect_unit *ids_unit = nh->pos;
 	ids_inspect_unit *ids_unit;
@@ -65,28 +66,32 @@ static __always_inline int inspect_payload(struct hdr_cursor *nh,void *data_end)
 	for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
 		ids_unit = nh->pos;
 		if (ids_unit + 1 > data_end) {
-			/* Reach the last byte of the packet */
+			// Reach the last byte of the packet 
 			return 0;
 		}
 		// memcpy(ids_map_key.unit.unit, ids_unit, IDS_INSPECT_STRIDE);
 		// memcpy(&(ids_map_key.unit), ids_unit, IDS_INSPECT_STRIDE);
 		ids_map_key.unit = *ids_unit;
+		// bpf_printk("char: %u\n", ids_map_key.unit);
+		// bpf_printk("src: %u\n", ids_map_key.state);
 		ids_map_value = bpf_map_lookup_elem(&ids_inspect_map, &ids_map_key);
 		if (ids_map_value) {
-			/* Go to the next state according to DFA */
+			// Go to the next state according to DFA 
 			ids_map_key.state = ids_map_value->state;
+			// bpf_printk("dst: %u\n", ids_map_value->state);
 			if (ids_map_value->flag > 0) {
-				/* An acceptable state, return the hit pattern number */
+				// An acceptable state, return the hit pattern number 
 				return ids_map_value->flag;
 			}
 		}
-		/* Prepare for next scanning */
+		// Prepare for next scanning 
 		nh->pos += 1;
 	}
 
-	/* The payload is not inspected completely */
+	// The payload is not inspected completely 
 	return -1;
 }
+*/
 
 SEC("xdp_ids")
 int xdp_ids_func(struct xdp_md *ctx)
@@ -154,9 +159,11 @@ int xdp_ids_func(struct xdp_md *ctx)
 	}
 
 	/* Only packet with valid TCP/UDP header will reach here */
-	meta->raw = nh.pos - data;
-	meta->unit = meta->raw % 10;
-	meta->tens = meta->raw / 10;
+	meta->raw = 0;
+	__u16 temp;
+	temp = nh.pos - data;
+	meta->unit = temp % 10;
+	meta->tens = temp / 10;
 	/* Debug info */
 	// bpf_printk("meta: %u\n", meta->raw);
 	// bpf_printk("Current packet pointer: %u\n", nh.pos);
@@ -175,7 +182,7 @@ int xdp_dpi_func(struct xdp_md *ctx)
 	void *data_meta = (void *)(long)ctx->data_meta;
 	struct meta_info *meta = data_meta;
 	struct hdr_cursor nh;
-	int ids_state = 0;
+	// int ids_state = 0;
 
 	/* Default action XDP_PASS, imply everything we couldn't parse, or that
 	 * we don't want to deal with, we just pass up the stack and let the
@@ -195,6 +202,9 @@ int xdp_dpi_func(struct xdp_md *ctx)
 		goto out;
 	}
 	nh.pos += meta->unit;
+	
+	// ids_inspect_state init_state = meta->raw;
+
 
 	if ((nh.pos + meta->tens * 10) > data_end) {
 		action = XDP_ABORTED;
@@ -207,21 +217,61 @@ int xdp_dpi_func(struct xdp_md *ctx)
 	// bpf_printk("meta: %u\n", meta->raw);
 	// bpf_printk("Current packet pointer: %u\n", nh.pos);
 
-	ids_state = inspect_payload(&nh, data_end);
-	if (ids_state > 0) {
-		action = XDP_DROP;
-		bpf_printk("The %dth pattern is triggered\n", ids_state);
-		goto out;
-	} else if (ids_state < 0) {
-		meta->raw = nh.pos - data;
-		meta->unit = meta->raw % 10;
-		meta->tens = meta->raw / 10;
-		bpf_tail_call(ctx, &tail_call_map, 0);
-		bpf_printk("Tail call fails in xdp_dpi!\n");
-	} else {
-		/* The packet is inspected completely */
-		goto out;
+	// ids_state = inspect_payload(&nh, data_end, init_state);
+
+	ids_inspect_unit *ids_unit;
+	struct ids_inspect_map_key ids_map_key;
+	struct ids_inspect_map_value *ids_map_value;
+	int i;
+	ids_map_key.state = meta->raw;
+	ids_map_key.padding = 0;
+
+	#pragma unroll
+	for (i = 0; i < IDS_INSPECT_DEPTH; i++) {
+		ids_unit = nh.pos;
+		if (ids_unit + 1 > data_end) {
+			/* Reach the last byte of the packet */
+			return 0;
+		}
+		// memcpy(ids_map_key.unit.unit, ids_unit, IDS_INSPECT_STRIDE);
+		// memcpy(&(ids_map_key.unit), ids_unit, IDS_INSPECT_STRIDE);
+		ids_map_key.unit = *ids_unit;
+		// bpf_printk("char: %u\n", ids_map_key.unit);
+		// bpf_printk("src: %u\n", ids_map_key.state);
+		ids_map_value = bpf_map_lookup_elem(&ids_inspect_map, &ids_map_key);
+		if (ids_map_value) {
+			/* Go to the next state according to DFA */
+			ids_map_key.state = ids_map_value->state;
+			// bpf_printk("dst: %u\n", ids_map_value->state);
+			if (ids_map_value->flag > 0) {
+				/* An acceptable state, return the hit pattern number */
+				action = XDP_DROP;
+				bpf_printk("The %dth pattern is triggered\n", ids_map_value->flag);
+				goto out;
+			}
+		}
+		/* Prepare for next scanning */
+		nh.pos += 1;
 	}
+
+
+	// bpf_printk("ids_state: %d\n", ids_state);
+	// if (ids_state > 0) {
+	// 	action = XDP_DROP;
+	// 	bpf_printk("The %dth pattern is triggered\n", ids_state);
+	// 	goto out;
+	// } else if (ids_state < 0) {
+	meta->raw = ids_map_key.state;
+	__u16 temp;
+	temp = nh.pos - data;
+	meta->unit = temp % 10;
+	meta->tens = temp / 10;
+	bpf_tail_call(ctx, &tail_call_map, 0);
+	bpf_printk("Tail call fails in xdp_dpi!\n");
+	// } else {
+		/* The packet is inspected completely */
+		// goto out;
+	// }
 
 out:
 	return xdp_stats_record_action(ctx, action);
