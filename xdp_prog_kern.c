@@ -27,7 +27,7 @@
 
 #define IDS_INSPECT_STRIDE 1
 #define IDS_INSPECT_MAP_SIZE 16777216
-#define IDS_INSPECT_DEPTH 150
+#define IDS_INSPECT_DEPTH 200
 #define TAIL_CALL_MAP_SIZE 1
 
 struct bpf_map_def SEC("maps") ids_inspect_map = {
@@ -162,6 +162,9 @@ int xdp_ids_func(struct xdp_md *ctx)
 	meta->raw = 0;
 	__u16 temp;
 	temp = nh.pos - data;
+	/* When adjusting the position of nh pointer, we cannot use 
+	the field in the meta directly. So we use unit and tens field 
+	to encode the nh pointer difference.*/
 	meta->unit = temp % 10;
 	meta->tens = temp / 10;
 	/* Debug info */
